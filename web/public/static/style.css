@@ -8,9 +8,9 @@
 @font-face{font-family:"Instrument Sans";src:url("/static/fonts/instrument-sans-latin-wght-normal.woff2") format("woff2");font-weight:400 700;font-display:swap}
 
 :root{
-  --bg:#ffffff; --shelf:#f5f6f4; --raise:#ffffff; --ink:#17191c; --mute:#6a6f76; --line:#e6e7e3;
-  --accent:#0f7a55; --accent-ink:#ffffff; --accent-soft:#e4f2ec; --warn:#a15c07; --bad:#b42318; --good:#0f7a55;
-  --user:#eef0ec; --focus:#0f7a5566; --shadow:0 1px 2px #0000000f;
+  --bg:#f3f2ee; --shelf:#eae9e4; --raise:#f9f8f5; --ink:#1d1f21; --mute:#63676c; --line:#dddcd5;
+  --accent:#0f7a55; --accent-ink:#ffffff; --accent-soft:#dfece5; --warn:#9a5806; --bad:#b42318; --good:#0f7a55;
+  --user:#e6e5df; --focus:#0f7a5566; --shadow:0 1px 2px #0000000f;
   color-scheme:light;
 }
 :root[data-theme="black"]{
@@ -191,3 +191,13 @@ textarea.inp{width:100%;min-height:200px;line-height:1.5}
   .main{grid-row:1}
   .topbar .whoami{display:none}
 }
+
+/* photos shared with a teammate, evidence on approvals, customer standing */
+.shot{display:block;max-width:260px;max-height:220px;border-radius:10px;border:1px solid var(--line)}
+.evthumb{width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--line);vertical-align:middle;margin-right:4px}
+.apbox{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center}
+.apcard{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0}
+.inp.sm{padding:4px 8px;font-size:13px;max-width:140px}
+.tier{font-size:12px;border-radius:99px;padding:1px 8px;border:1px solid var(--line)}
+.tier.loyal{color:var(--good);border-color:var(--good)} .tier.watch{color:var(--warn);border-color:var(--warn)} .tier.blocked{color:var(--bad);border-color:var(--bad)}
+.box .iconbtn{width:36px;height:36px;align-self:flex-end}

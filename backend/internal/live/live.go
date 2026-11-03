@@ -46,8 +46,9 @@ type Hub struct {
 	JoinAfter time.Duration
 
 	mu     sync.Mutex
-	typing map[string]string // sid -> name of agent currently typing
-	joinMu sync.Mutex        // one agent per ticket, even if two click "Join" at once
+	typing map[string]string         // sid -> name of agent currently typing
+	inv    map[string]*investigation // ticket -> what the simulated teammate is checking
+	joinMu sync.Mutex                // one agent per ticket, even if two click "Join" at once
 }
 
 // State is what the customer's chat window polls.
@@ -161,6 +162,7 @@ type Context struct {
 	Orders    []model.Order    `json:"orders"`
 	Approvals []model.Approval `json:"approvals"`
 	Messages  []model.Message  `json:"messages"`
+	Standing  agent.Standing   `json:"standing"` // loyal / standard / watch / blocked, and why
 }
 
 func (h *Hub) ContextFor(t model.Ticket) Context {
@@ -176,7 +178,7 @@ func (h *Hub) ContextFor(t model.Ticket) Context {
 	if len(orders) > 5 {
 		orders = orders[len(orders)-5:]
 	}
-	return Context{Ticket: t, Customer: u, Orders: orders, Approvals: aps, Messages: msgs}
+	return Context{Ticket: t, Customer: u, Orders: orders, Approvals: aps, Messages: msgs, Standing: h.Tools.CustomerStanding(t.CustomerID)}
 }
 
 // ---------------- simulated teammates (demo mode) ----------------
@@ -230,35 +232,166 @@ func (h *Hub) simJoin(t model.Ticket) {
 	go h.simGreet(t)
 }
 
+// investigation is how a teammate reviews a held return before approving it:
+// ask about the item's condition, ask for a photo above the customer's threshold,
+// then decide (approve, decline, or pass to a specialist).
+type investigation struct {
+	a     model.Approval
+	step  string // condition | photo | done
+	cond  string
+	tries int
+	note  []string
+}
+
+var (
+	unusedRe  = regexp.MustCompile(`(?i)\b(unused|unopened|never (been )?(used|worn|opened|worn it)|not (been )?(used|worn|opened)|brand new|like new|sealed|still in (the |its )?box|original (packaging|box)|tags (are )?(still )?on|didn'?t (use|wear|open))\b`)
+	defectRe  = regexp.MustCompile(`(?i)\b(defective|broken|faulty|damaged|cracked|doesn'?t (work|turn on|charge)|not working|stopped working|dead|wrong (item|size|color|colour|model)|arrived (broken|damaged))\b`)
+	usedRe    = regexp.MustCompile(`(?i)\b(used|worn|wore|opened|tried (it|them) (on|out)|washed|scratched|for a (few|couple of) (days|weeks|months)|ran in)\b`)
+	missingRe = regexp.MustCompile(`(?i)\b(missing|lost|threw away|without) (the )?(box|charger|cable|case|accessor\w*|parts?|packaging)\b`)
+)
+
 func (h *Hub) simGreet(t model.Ticket) {
 	c := h.ContextFor(t)
 	h.typeFor(t, 1800*time.Millisecond)
 	greet := fmt.Sprintf("Hi %s, I'm %s from MyFlipKart support. I've read your chat with Sauby.", first(c.Customer.Name), first(t.AgentName))
-	if len(c.Approvals) > 0 { // a refund waiting for a human: the teammate reviews it
-		a := c.Approvals[0]
-		what := map[string]string{"order": "new order", "replacement": "replacement", "return": "return"}[a.Kind]
-		if what == "" {
-			what = "refund"
+	if c.Standing.Tier == "loyal" {
+		greet += " Thanks for being a loyal customer."
+	}
+	if len(c.Approvals) == 0 {
+		h.say(t, "agent", greet+" How can I help?", nil)
+		return
+	}
+	a := c.Approvals[0]
+	item := a.OrderID
+	if o, ok := h.S.Order(a.OrderID); ok && len(o.Items) > 0 {
+		if p, ok := h.S.Product(o.Items[0]); ok {
+			item = fmt.Sprintf("the %s from order %s", p.Name, a.OrderID)
 		}
-		h.say(t, "agent", greet+fmt.Sprintf(" I can see your $%.2f %s for %s is waiting for approval. Let me review it.", a.Amount, what, a.OrderID), nil)
+	}
+	switch {
+	case a.NoReturn: // missing item: check the courier, decide on standing
+		h.say(t, "agent", greet+fmt.Sprintf(" I'm sorry %s hasn't reached you. Let me check the tracking with the courier.", item), nil)
+		h.typeFor(t, 3000*time.Millisecond)
+		if c.Standing.Tier == "watch" || c.Standing.Tier == "blocked" {
+			h.say(t, "agent", "The courier shows it as delivered, so I've opened a formal claim with them. Our claims team will email you within 24 hours with the outcome.", nil)
+			return
+		}
+		d, err := h.Tools.DecideApproval(a.ID, agent.Decision{Approve: true, Condition: "not_received", Note: "courier could not confirm the drop-off"}, t.AgentName+" (simulated)")
+		if err == nil {
+			h.say(t, "agent", fmt.Sprintf("The courier couldn't confirm the drop-off, so I've approved a full refund of $%.2f. It reaches your original payment method in 5-7 business days. Anything else I can help with?", d.Amount), nil)
+		}
+		return
+	case a.Kind == "order" || a.Kind == "replacement":
+		h.say(t, "agent", greet+fmt.Sprintf(" I can see your %s %s is waiting for a review. Let me check it.", map[string]string{"order": "new order", "replacement": "replacement"}[a.Kind], a.OrderID), nil)
 		h.typeFor(t, 2500*time.Millisecond)
-		if d, err := h.Tools.DecideApproval(a.ID, true, t.AgentName+" (simulated)"); err == nil {
-			msg := "Done — I've approved it. "
-			switch {
-			case d.Kind == "return":
-				msg += fmt.Sprintf("Your prepaid return label is in your email, and the $%.2f refund is released as soon as the item reaches us.", d.Amount)
-			case d.Kind == "order" || d.Kind == "replacement":
-				msg += fmt.Sprintf("Order %s will ship soon.", d.OrderID)
-			case d.Refunded:
-				msg += fmt.Sprintf("$%.2f will be back on your original payment method in 5-7 business days.", d.Amount)
-			default:
-				msg += fmt.Sprintf("Your $%.2f refund is paid as soon as the returned item reaches us.", d.Amount)
-			}
-			h.say(t, "agent", msg+" Is there anything else I can help with?", nil)
+		if _, err := h.Tools.DecideApproval(a.ID, agent.Decision{Approve: true, Note: "reviewed"}, t.AgentName+" (simulated)"); err == nil {
+			h.say(t, "agent", fmt.Sprintf("All good: I've approved it, and order %s will ship soon. Is there anything else I can help with?", a.OrderID), nil)
 		}
 		return
 	}
-	h.say(t, "agent", greet+" How can I help?", nil)
+	h.mu.Lock()
+	if h.inv == nil {
+		h.inv = map[string]*investigation{}
+	}
+	h.inv[t.ID] = &investigation{a: a, step: "condition"}
+	h.mu.Unlock()
+	h.say(t, "agent", greet+fmt.Sprintf(" I'm reviewing your return for %s ($%.2f). Before I approve it, a couple of quick questions: "+
+		"is the item unused and in its original packaging, or has it been used or worn? If something's wrong with it, tell me what. "+
+		"And do you still have all the accessories?", item, a.Amount), nil)
+}
+
+// investigate continues a return review. It returns false when there's no review in progress.
+func (h *Hub) investigate(t model.Ticket, text string, photo bool) bool {
+	h.mu.Lock()
+	iv := h.inv[t.ID]
+	h.mu.Unlock()
+	if iv == nil || iv.step == "done" {
+		return false
+	}
+	st := h.Tools.CustomerStanding(t.CustomerID)
+	decide := func(approve bool, note string) {
+		iv.note = append(iv.note, note)
+		d, err := h.Tools.DecideApproval(iv.a.ID, agent.Decision{Approve: approve, Condition: iv.cond, Note: strings.Join(iv.note, "; ")}, t.AgentName+" (simulated)")
+		iv.step = "done"
+		if err != nil {
+			h.say(t, "agent", "I've passed this to our returns specialist, who'll email you within a day.", nil)
+			return
+		}
+		if !approve {
+			return
+		}
+		msg := "Thanks, that's everything I need. I've approved your return: the prepaid label is in your email, and "
+		if d.Refunded {
+			msg = fmt.Sprintf("Thanks, that's everything I need. I've approved it, and $%.2f goes back to your original payment method in 5-7 business days.", d.Amount)
+		} else {
+			msg += fmt.Sprintf("your $%.2f refund is released as soon as the item reaches our warehouse.", d.Amount)
+		}
+		h.say(t, "agent", msg+" Is there anything else I can help with?", nil)
+	}
+	switch iv.step {
+	case "condition":
+		if photo {
+			iv.note = append(iv.note, "customer sent a photo early")
+		}
+		if missingRe.MatchString(text) {
+			iv.note = append(iv.note, "customer reports missing accessories/packaging")
+		}
+		switch {
+		case defectRe.MatchString(text):
+			iv.cond = "defective"
+			iv.note = append(iv.note, "customer reports: "+text)
+		case unusedRe.MatchString(text):
+			iv.cond = "unused"
+		case usedRe.MatchString(text):
+			iv.cond = "used"
+			iv.step = "done"
+			h.Tools.DecideApproval(iv.a.ID, agent.Decision{Approve: false, Condition: "used", Note: "item used and not faulty"}, t.AgentName+" (simulated)")
+			h.say(t, "agent", "Thanks for being upfront. Because the item has been used and isn't faulty, it doesn't qualify for a return under our policy: "+
+				"items need to be in their original condition. If it ever stops working, it's covered by the 1-year warranty and I'm happy to help with that. Is there anything else I can do for you?", nil)
+			return true
+		default:
+			iv.tries++
+			if iv.tries >= 3 {
+				iv.step = "done"
+				h.say(t, "agent", "No problem. I'll pass this to our returns specialist with our chat, and they'll email you within a day.", nil)
+				return true
+			}
+			h.say(t, "agent", "Sorry, just so I get this right: is the item unused (still like new), or has it been used? And is anything wrong with it, like damage or a fault?", nil)
+			return true
+		}
+		if missingRe.MatchString(text) && iv.cond == "unused" {
+			h.say(t, "agent", "Thanks. Since some accessories or packaging are missing, I'll note that on the return; please send back everything you still have.", nil)
+		}
+		if iv.a.Amount > st.PhotoOver && !photo {
+			iv.step = "photo"
+			h.say(t, "agent", fmt.Sprintf("Got it, thank you. Because this item is over $%.0f, I need a quick look at it: could you upload a clear photo%s using the camera button next to the message box?",
+				st.PhotoOver, map[bool]string{true: " showing the fault or damage", false: " of the item"}[iv.cond == "defective"]), nil)
+			return true
+		}
+		decide(true, "condition: "+iv.cond)
+	case "photo":
+		if !photo {
+			iv.tries++
+			h.say(t, "agent", "Whenever you're ready, tap the camera button next to the message box to add the photo. I'll wait right here.", nil)
+			return true
+		}
+		h.typeFor(t, 2000*time.Millisecond)
+		h.say(t, "agent", "Thanks for the photo, I can see it clearly and it matches what you described.", nil)
+		decide(true, "condition: "+iv.cond+"; photo reviewed")
+	}
+	return true
+}
+
+// CustomerPhoto is called after the customer uploads a photo into a live chat.
+func (h *Hub) CustomerPhoto(t model.Ticket) {
+	if t.Status == "active" && t.AgentKind == "simulated" {
+		go func() {
+			h.typeFor(t, 1200*time.Millisecond)
+			if !h.investigate(t, "", true) {
+				h.say(t, "agent", "Thanks for the photo, I've added it to your case.", nil)
+			}
+		}()
+	}
 }
 
 var byeRe = regexp.MustCompile(`(?i)^\s*(thanks|thank you|thx|that'?s all|no(pe)?|bye|all good|perfect)\b`)
@@ -267,6 +400,9 @@ var byeRe = regexp.MustCompile(`(?i)^\s*(thanks|thank you|thx|that'?s all|no(pe)
 // uses, run read-only (commit=false), phrased in first person.
 func (h *Hub) simReply(t model.Ticket, text string) {
 	h.typeFor(t, 2000*time.Millisecond)
+	if h.investigate(t, text, false) {
+		return
+	}
 	if byeRe.MatchString(text) {
 		h.say(t, "agent", "You're welcome! I'll hand you back to Sauby now. Have a great day.", nil)
 		h.Close(t.ID)

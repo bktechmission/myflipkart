@@ -164,7 +164,7 @@ var Policies = []PolicyDoc{
 		"You can return most items within 30 days of delivery for a full refund. Items must be in original condition with all accessories.",
 		"Opened headphones and earbuds can be returned only if defective, for hygiene reasons.",
 		"To start a return, ask Sauby to return your order and you will get a return authorization (RMA) number and a prepaid label.",
-		"Returns worth more than $30, and any return beyond 3 in 30 days, are reviewed by a teammate before the label is issued.",
+		"Returns worth more than $29, and any return beyond 3 in 30 days, are reviewed by a teammate before the label is issued. The teammate asks about the item's condition and, above $150, for a photo.",
 	}},
 	{ID: "cancellation", Title: "Order Cancellation", Version: 1, Paras: []string{
 		"Orders can be cancelled any time before they ship, while the status is 'placed'. Cancelled orders are refunded automatically.",

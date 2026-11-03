@@ -130,6 +130,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/sessions", s.withAuth(s.newSession, false))
 	m.HandleFunc("GET /api/sessions/{sid}", s.withAuth(s.sessionMessages, false))
 	m.HandleFunc("GET /api/sessions/{sid}/live", s.withAuth(s.liveState, false))
+	m.HandleFunc("POST /api/sessions/{sid}/photo", s.withAuth(s.uploadPhoto, false))
+	m.HandleFunc("GET /api/photos/{cid}/{id}", s.withAuth(s.photo, false))
 	m.HandleFunc("GET /api/products", s.withAuth(s.products, false))
 	m.HandleFunc("GET /img/{file}", s.productImage)
 	m.HandleFunc("GET /metrics", obs.Default.Handler(s.cfg.MetricsToken))
@@ -176,7 +178,11 @@ func (s *Server) secure(next http.Handler) http.Handler {
 		if s.isHTTPS(r) {
 			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		limit := int64(64 << 10)
+		if strings.HasSuffix(r.URL.Path, "/photo") {
+			limit = maxPhotoBytes
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		// CSRF: state-changing API calls must carry a custom header, which a
 		// cross-site form or image tag cannot add (and SameSite=Lax cookies).
 		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.URL.Path, "/api/") && r.Header.Get("X-Sauby") != "1" {

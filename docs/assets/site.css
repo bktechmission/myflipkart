@@ -3,7 +3,7 @@
  * Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
  */
 @font-face{font-family:"Instrument Sans";src:url("instrument-sans.woff2") format("woff2");font-weight:400 700;font-display:swap}
-:root{--bg:#fff;--shelf:#f5f6f4;--raise:#fff;--ink:#17191c;--mute:#6a6f76;--line:#e6e7e3;--accent:#0f7a55;--accent-ink:#fff;--accent-soft:#e4f2ec;
+:root{--bg:#f3f2ee;--shelf:#eae9e4;--raise:#f9f8f5;--ink:#1d1f21;--mute:#63676c;--line:#dddcd5;--accent:#0f7a55;--accent-ink:#fff;--accent-soft:#e4f2ec;
   --k-edge:#dbe8f7;--k-core:#e7e1f7;--k-llm:#f9e6cf;--k-rag:#ddf0e1;--k-human:#f8dedb;--k-data:#d9f1ef;--k-loop:#f6efc9;color-scheme:light}
 :root[data-theme="black"]{--bg:#000;--shelf:#0c0d0c;--raise:#121412;--ink:#ececea;--mute:#9ba09f;--line:#232523;--accent:#5bbf98;--accent-ink:#00140c;--accent-soft:#0f2a20;
   --k-edge:#13243a;--k-core:#211a36;--k-llm:#33240f;--k-rag:#12291a;--k-human:#331616;--k-data:#0e2a28;--k-loop:#2d2a10;color-scheme:dark}

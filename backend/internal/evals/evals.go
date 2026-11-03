@@ -381,13 +381,17 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 				c["asks_which_order"] = len(final.Result.Choices) > 0 && !final.Result.Committed
 			} else if agent.ConfirmTools[g.Tool] && *g.ExpectOK {
 				// money path must ask first, and only "yes" commits (or escalates)
-				c["confirm_before_commit"] = first.NeedsConfirm && !first.Result.Committed &&
-					(final.Result.Committed || final.Result.Escalated)
+				// or, when a guardrail fires, hand straight to a person without moving anything
+				c["confirm_before_commit"] = (first.NeedsConfirm && !first.Result.Committed &&
+					(final.Result.Committed || final.Result.Escalated)) ||
+					(first.Result.Escalated && !first.Result.Committed && first.Result.Ticket != nil && first.Result.Ticket.Kind == "live")
 			}
 			if g.Tool == "request_refund" && *g.ExpectOK && !g.Choose { // guardrail: big refunds must go to a human
 				c["escalation_ok"] = final.Result.Escalated == g.Escalate && final.Result.Committed == !g.Escalate
 			}
-			if final.AskFeedback == "" && (final.Result.Committed || final.Result.Escalated) {
+			liveNow := final.Result.Ticket != nil && final.Result.Ticket.Kind == "live" // feedback is asked when the teammate closes
+			if liveNow {
+			} else if final.AskFeedback == "" && (final.Result.Committed || final.Result.Escalated) {
 				c["asks_feedback"] = false
 			} else if final.Result.Committed || final.Result.Escalated {
 				c["asks_feedback"] = true
@@ -553,11 +557,50 @@ func consistency(o Options) map[string]any {
 	v := small.Run("return_order", map[string]any{"order_id": "O5009"}, "C1001", "x", true)
 	big := (&agent.Tools{S: st2, R: o.Retriever, ReturnWindow: o.Cfg.ReturnWindowDays, AutoRefundLimit: 30}).Run("return_order", map[string]any{"order_id": "O5008"}, "C1001", "x", true)
 	returnsGuarded := v.Escalated && !v.Committed && v.Guardrail == "return_velocity" && big.Escalated && !big.Committed
-	pass := returnsGuarded && idem && commits == 1 && n == 1 && !x.OK && held && noRefundWithoutReturn && releasedOnReceipt && noOversell
+	// 6) a teammate can't approve a $568 return without recording the condition and seeing a photo
+	//    (Aarav is a loyal customer: his photo threshold is $300)
+	st4, _ := store.Open("", "")
+	t4 := &agent.Tools{S: st4, R: o.Retriever, ReturnWindow: o.Cfg.ReturnWindowDays, AutoRefundLimit: 29}
+	h := t4.Run("return_order", map[string]any{"order_id": "O5005"}, "C1001", "0123456789abcdef", false) // no confirm: straight to a person
+	var apID string
+	for _, ap := range st4.Approvals() {
+		apID = ap.ID
+	}
+	_, errNoCond := t4.DecideApproval(apID, agent.Decision{Approve: true}, "eval")
+	_, errNoPhoto := t4.DecideApproval(apID, agent.Decision{Approve: true, Condition: "unused"}, "eval")
+	st4.AttachEvidence("C1001", "00000000000000aa")
+	_, errOK := t4.DecideApproval(apID, agent.Decision{Approve: true, Condition: "unused"}, "eval")
+	investigated := h.Escalated && h.Ticket != nil && h.Ticket.Kind == "live" && errNoCond != nil && errNoPhoto != nil && errOK == nil
+	// 7) two declined requests put an account on watch: even a $29 return then goes to a person
+	st5, _ := store.Open("", "")
+	t5 := &agent.Tools{S: st5, R: o.Retriever, ReturnWindow: o.Cfg.ReturnWindowDays, AutoRefundLimit: 29}
+	for _, id := range []string{"O5008", "O5005"} {
+		t5.Run("return_order", map[string]any{"order_id": id}, "C1001", "0123456789abcdee", false)
+	}
+	for _, ap := range st5.Approvals() {
+		t5.DecideApproval(ap.ID, agent.Decision{Approve: false, Note: "used"}, "eval")
+	}
+	w := t5.Run("return_order", map[string]any{"order_id": "O5009"}, "C1001", "0123456789abcded", false)
+	watched := t5.CustomerStanding("C1001").Tier == "watch" && w.Escalated && w.Guardrail == "account_review"
+	// 8) a seller with repeated complaints is suspended: hidden from search, can't take orders
+	st6, _ := store.Open("", "")
+	t6 := &agent.Tools{S: st6, R: o.Retriever, ReturnWindow: o.Cfg.ReturnWindowDays}
+	for i, sid := range []string{"00000000000000a1", "00000000000000a2"} {
+		t6.Run("file_complaint", map[string]any{"order_id": []string{"O5001", "O5007"}[i], "about": "seller", "summary": "fake item"}, "C1001", sid, false)
+	}
+	sr := t6.Run("search_products", map[string]any{"query": "noise cancelling headphones"}, "C1001", "x", false)
+	hidden := true
+	for _, p := range sr.Products {
+		hidden = hidden && p.Seller != "SoundCity Retail"
+	}
+	po := t6.Run("place_order", map[string]any{"product_id": "P1001"}, "C1001", "x", false)
+	sellerBlocked := hidden && !po.OK && po.Guardrail == "seller_suspended"
+	pass := returnsGuarded && investigated && watched && sellerBlocked && idem && commits == 1 && n == 1 && !x.OK && held && noRefundWithoutReturn && releasedOnReceipt && noOversell
 	return map[string]any{"idempotent_refund": idem, "concurrent_commits": commits, "refund_records": n,
 		"exactly_once": commits == 1 && n == 1, "cross_customer_blocked": !x.OK && !x.Committed,
 		"large_refund_held_once": held, "no_refund_without_return": noRefundWithoutReturn,
-		"refund_released_on_receipt": releasedOnReceipt, "no_oversell": noOversell, "returns_guarded": returnsGuarded, "pass": pass}
+		"refund_released_on_receipt": releasedOnReceipt, "no_oversell": noOversell, "returns_guarded": returnsGuarded, "teammate_must_investigate": investigated,
+		"bad_customer_reviewed": watched, "bad_seller_suspended": sellerBlocked, "pass": pass}
 }
 
 // ---------------- orchestration & persistence ----------------

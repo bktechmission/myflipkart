@@ -49,9 +49,11 @@
       <div class="stream" id="stream"></div>
       <form class="compose" id="compose">
         <button type="button" class="jump hide" id="jump" aria-label="Jump to the latest message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
-        <div class="box"><textarea id="q" rows="1" placeholder="Ask about a product or an order" aria-label="Message"></textarea>
+        <div class="box"><button type="button" class="iconbtn hide" id="photoBtn" aria-label="Share a photo with your teammate" title="Share a photo"><span data-icon="camera"></span></button>
+          <input type="file" id="photoIn" accept="image/jpeg,image/png,image/*" class="hide">
+          <textarea id="q" rows="1" placeholder="Ask about a product or an order" aria-label="Message"></textarea>
           <button class="btn" type="submit" aria-label="Send"><span data-icon="send"></span></button></div>
-        <div class="note">Sauby confirms before changing an order. Returns over $30, or more than 3 a month, go to a teammate.</div>
+        <div class="note">Sauby confirms before changing an order. Returns over $29, or more than 3 a month, go to a teammate right here in the chat.</div>
       </form>
     </section>
 

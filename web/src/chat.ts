@@ -114,7 +114,7 @@ async function openSession(id: string): Promise<void> {
 /** Render one stored conversation message (used for history and live polling). */
 function renderMessage(m: any, history: boolean): void {
   const meta = m.meta || {};
-  if (m.role === "user") addTurn("user", esc(m.content));
+  if (m.role === "user") addTurn("user", m.meta?.photo ? photoHtml(m.meta.photo) : esc(m.content));
   else if (m.role === "assistant") addTurn("bot", renderAnswer({ answer: m.content, ...meta }, history));
   else if (m.role === "agent") addAgentTurn(m.content, meta.agent_name || "Support", meta.agent_kind, history ? "" : meta.ask_feedback);
   else if (m.role === "system") {
@@ -243,7 +243,7 @@ async function send(text: string): Promise<void> {
       if (ev === "answer") {
         bubble.innerHTML = `<div class="who">Sauby</div>` + renderAnswer(data);
         if (["cancel_order", "return_order", "request_refund", "place_order", "replace_order"].includes(data.tool)) loadOrders();
-        if ((data.tool === "handoff" || data.tool === "file_complaint") && data.ok && data.result?.ticket) pollLive();
+        if (data.result?.ticket?.kind === "live") pollLive(); // handoff, complaint, or a guardrail bringing in a teammate
       }
       if (ev === "live") { turn.remove(); pollLive(); }
       toBottom();
@@ -262,10 +262,44 @@ async function send(text: string): Promise<void> {
 
 function stopLive(): void { if (liveTimer) clearTimeout(liveTimer); liveTimer = 0; }
 
+// ---------------- photos for a teammate (returns over the photo threshold) ----------------
+const photoHtml = (url: string) => `<a href="${esc(url)}" target="_blank" rel="noopener"><img class="shot" src="${esc(url)}" alt="Photo you shared"></a>`;
+
+/** Shrink to at most 1600px and re-encode as JPEG in the browser (smaller upload; the server re-encodes again and drops metadata). */
+async function shrink(file: File): Promise<Blob> {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext("2d")!.drawImage(bmp, 0, 0, c.width, c.height);
+  return await new Promise<Blob>((ok, bad) => c.toBlob((b) => (b ? ok(b) : bad(new Error("couldn't read that photo"))), "image/jpeg", 0.85));
+}
+
+async function uploadPhoto(file: File): Promise<void> {
+  const turn = addTurn("user", `<span class="muted">Uploading photo…</span>`);
+  try {
+    const body = await shrink(file);
+    const r = await fetch(`/api/sessions/${sid}/photo`, { method: "POST", body, headers: { "X-Sauby": "1", "Content-Type": "image/jpeg" }, credentials: "same-origin" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "upload failed");
+    turn.querySelector(".bubble")!.innerHTML = photoHtml(j.url);
+    cursor += 1; // the server stored this message; don't render it twice
+  } catch (e) {
+    turn.querySelector(".bubble")!.innerHTML = `<span class="bad">${esc((e as Error).message)}</span>`;
+  }
+}
+$("#photoBtn").addEventListener("click", () => ($("#photoIn") as HTMLInputElement).click());
+$("#photoIn").addEventListener("change", (e) => {
+  const inp = e.target as HTMLInputElement;
+  if (inp.files?.[0]) uploadPhoto(inp.files[0]);
+  inp.value = "";
+});
+
 async function pollLive(): Promise<void> {
   stopLive();
   try {
     const st = await api<any>(`/api/sessions/${sid}/live?after=${cursor}`);
+    $("#photoBtn").classList.toggle("hide", st.mode !== "human"); // photos go to a teammate, not to Sauby
     for (const m of st.messages) {
       // skip echoes of what this page already rendered itself
       if (m.role === "user" || m.role === "assistant") continue;

@@ -78,13 +78,25 @@ async function loadMetrics(): Promise<void> {
 }
 
 // ---------------- human approval queue ----------------
+/** Approve / reject controls. Returns and refunds need the item's condition (and, over the
+ *  customer's photo threshold, a photo): the server enforces it, this just makes it easy. */
+function apControls(a: any): string {
+  const needsCond = !a.no_return && (a.kind === "" || !a.kind || a.kind === "return" || a.kind === "refund");
+  const ev = (a.evidence || []).map((id: string) => { const u = `/api/photos/${esc(a.customer_id)}/${esc(id)}`;
+    return `<a href="${u}" target="_blank" rel="noopener"><img class="evthumb" src="${u}" alt="customer photo"></a>`; }).join("");
+  return `<span class="apbox">${ev || (needsCond ? '<span class="muted">no photo yet</span> ' : "")}
+    ${needsCond ? `<select class="inp sm" data-cond><option value="">Condition…</option><option>unused</option><option>defective</option><option>used</option></select>
+    <input class="inp sm" data-note placeholder="Note">` : ""}
+    <button class="btn sm" data-ap="${esc(a.id)}" data-d="approve">Approve</button> <button class="btn ghost sm" data-ap="${esc(a.id)}" data-d="reject">Reject</button></span>`;
+}
+const tierTag = (t: string) => `<span class="tier ${esc(t)}">${esc(t)}</span>`;
 async function loadApprovals(): Promise<void> {
   const d = await api("/api/admin/approvals");
   $("#apNote").textContent = `Refunds above $${d.limit}, missing-item claims, large or frequent orders and big replacements wait here. A refund is paid only once the item is back (or confirmed lost).`;
   const pending = d.approvals.filter((a: any) => a.status === "pending");
   $("#pending").innerHTML = pending.length ? table(["approval", "type", "order", "customer", "amount", "why held", "customer said", "since", ""],
     pending.map((a: any) => [esc(a.id), esc(a.kind || "refund"), esc(a.order_id), esc(a.customer_id), money(a.amount), esc(a.why), esc(a.reason || ""), new Date(a.created_at).toLocaleString(),
-      `<button class="btn sm" data-ap="${esc(a.id)}" data-d="approve">Approve</button> <button class="btn ghost sm" data-ap="${esc(a.id)}" data-d="reject">Reject</button>`]))
+      apControls(a)]))
     : `<tr><td class="muted">Nothing waiting. Try “I want a refund for O5008” as aarav@example.com.</td></tr>`;
   $("#decided").innerHTML = table(["approval", "order", "amount", "decision", "by"],
     d.approvals.filter((a: any) => a.status !== "pending").map((a: any) => [esc(a.id), esc(a.order_id), money(a.amount),
@@ -93,6 +105,9 @@ async function loadApprovals(): Promise<void> {
     d.returns.map((o: any) => [esc(o.id), esc(o.customer_id), esc(o.rma || ""), esc(o.status.replace(/_/g, " ")), o.refund_on_receipt ? money(o.total) : "—",
       `<button class="btn sm" data-rcv="${esc(o.id)}">Mark received</button>`]))
     : `<tr><td class="muted">No returns in transit. Try “return O5009” as aarav@example.com.</td></tr>`;
+  $("#sellers").innerHTML = table(["seller", "products", "rating", "orders", "returned", "complaints", "status", "why"],
+    (d.sellers || []).map((s: any) => [esc(s.seller), s.products, s.avg_rating.toFixed(1), s.orders, `${Math.round(s.return_rate * 100)}%`, s.complaints,
+      `<span class="${s.status === "suspended" ? "bad" : s.status === "watch" ? "warn" : "good"}">${esc(s.status)}</span>`, esc((s.reasons || []).join("; "))]));
   $("#tickets").innerHTML = table(["ticket", "customer", "summary"], (d.tickets || []).slice(-15).reverse().map((t: any) => [esc(t.id), esc(t.customer_id), esc(t.summary)]));
 }
 
@@ -252,7 +267,10 @@ document.addEventListener("click", async (ev) => {
   const t = ev.target as HTMLElement;
   const ap = t.closest<HTMLElement>("[data-ap]");
   if (ap) {
-    try { await api(`/api/admin/approvals/${ap.dataset.ap}`, { method: "POST", body: JSON.stringify({ decision: ap.dataset.d }) }); }
+    const box = ap.closest(".apbox");
+    const condition = (box?.querySelector("[data-cond]") as HTMLSelectElement | null)?.value || "";
+    const note = (box?.querySelector("[data-note]") as HTMLInputElement | null)?.value || "";
+    try { await api(`/api/admin/approvals/${ap.dataset.ap}`, { method: "POST", body: JSON.stringify({ decision: ap.dataset.d, condition, note }) }); }
     catch (e) { alert((e as Error).message); }
     loadApprovals(); return;
   }
@@ -317,14 +335,18 @@ function renderLive(c: any, d: any): void {
   const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
   box.innerHTML = c.messages.map((m: any) => {
     const who = m.role === "user" ? c.customer.name : m.role === "assistant" ? "Sauby" : m.meta?.agent_name || "";
-    return m.role === "system" ? `<div class="lm system">${esc(m.content)}</div>`
-      : `<div class="lm ${m.role}"><small>${esc(who)}</small>${esc(m.content)}</div>`;
+    if (m.role === "system") return `<div class="lm system">${esc(m.content)}</div>`;
+    const pic = m.meta?.photo ? `<a href="${esc(m.meta.photo)}" target="_blank" rel="noopener"><img class="shot" src="${esc(m.meta.photo)}" alt="customer photo"></a>` : esc(m.content);
+    return `<div class="lm ${m.role}"><small>${esc(who)}</small>${pic}</div>`;
   }).join("");
   if (atBottom) box.scrollTop = box.scrollHeight;
   $("#liveCtx").innerHTML = `<p><b>${esc(c.customer.name)}</b><br><span class="muted">${esc(c.customer.email)}<br>cid ${esc(t.customer_id)} · sid ${esc(t.session_id.slice(0, 8))}…</span></p>
+    <p><b>Customer standing</b> ${tierTag(c.standing?.tier || "standard")}<br><span class="muted">${esc((c.standing?.reasons || []).join("; ") || "No returns or claims on record")}<br>
+      Photo needed above ${c.standing?.photo_over ? money(c.standing.photo_over) : "any amount"}</span></p>
     <p><b>Why they need us</b><br>${esc(t.summary || "Asked for a person")}</p>
     <p><b>Recent orders</b></p>${(c.orders || []).slice().reverse().map((o: any) => `<div class="muted">${o.id} · ${esc(o.status.replace(/_/g, " "))} · ${money(o.total)}</div>`).join("") || '<div class="muted">None</div>'}
-    ${(c.approvals || []).length ? `<p><b>Waiting for approval</b></p>` + c.approvals.map((a: any) => `<div>${a.order_id} · ${money(a.amount)} <button class="btn sm" data-ap="${esc(a.id)}" data-d="approve">Approve</button></div>`).join("") : ""}`;
+    ${(c.approvals || []).length ? `<p><b>Waiting for your decision</b><br><span class="muted">Ask about the item's condition (unused, defective, used) and check the photo before approving.</span></p>` +
+      c.approvals.map((a: any) => `<div class="apcard"><b>${esc(a.kind || "refund")}</b> · ${a.order_id} · ${money(a.amount)}<br><span class="muted">${esc(a.why)}</span><br>${apControls(a)}</div>`).join("") : ""}`;
   void me;
 }
 

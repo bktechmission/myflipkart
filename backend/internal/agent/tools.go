@@ -153,11 +153,18 @@ func (t *Tools) maxReturns() int {
 	return t.MaxReturnsPerMonth
 }
 
-// returnGuard: returns worth more than the auto limit, or more than N returns in 30
-// days, always go to a human before a label is issued.
-func (t *Tools) returnGuard(tx *store.Txn, o model.Order) (why, guardrail string) {
+// returnGuard: a return worth more than the auto limit, the customer's 4th+ return
+// in 30 days, or an account on watch always goes to a person before a label is issued.
+// why is for the teammate; say is what the customer is told.
+func (t *Tools) returnGuard(tx *store.Txn, o model.Order) (why, guardrail, say string) {
+	st := t.standingTx(tx, o.CustomerID)
+	if st.Tier == "watch" || st.Tier == "blocked" {
+		return "account standing: " + st.Tier + " (" + strings.Join(st.Reasons, "; ") + ")", "account_review",
+			"Returns on your account are reviewed by a teammate."
+	}
 	if t.AutoRefundLimit > 0 && o.Total > t.AutoRefundLimit {
-		return fmt.Sprintf("returns over $%.0f are reviewed by a teammate", t.AutoRefundLimit), "return_over_limit"
+		return fmt.Sprintf("returns over $%.0f are reviewed by a teammate", t.AutoRefundLimit), "return_over_limit",
+			fmt.Sprintf("This item is $%.2f, which is above our $%.0f limit for automatic returns.", o.Total, t.AutoRefundLimit)
 	}
 	n := 0
 	for _, x := range tx.OrdersFor(o.CustomerID) {
@@ -166,21 +173,40 @@ func (t *Tools) returnGuard(tx *store.Txn, o model.Order) (why, guardrail string
 		}
 	}
 	if n >= t.maxReturns() {
-		return fmt.Sprintf("more than %d returns in 30 days are reviewed by a teammate", t.maxReturns()), "return_velocity"
+		return fmt.Sprintf("more than %d returns in 30 days (%d already)", t.maxReturns(), n), "return_velocity",
+			fmt.Sprintf("You've already started %d returns in the last 30 days, which is the most we can process automatically in a month.", n)
 	}
-	return "", ""
+	return "", "", ""
 }
 
-// startReturn issues the RMA, or holds the return for a teammate when a guardrail fires.
+// toHuman holds the request for a teammate AND brings one into this chat right away.
+func (t *Tools) toHuman(tx *store.Txn, o model.Order, kind string, why, guardrail, say, reason, sid, prev string, noReturn bool, res *ToolResult) {
+	t.hold(tx, o, kind, o.Total, why, reason, sid, prev, noReturn)
+	lt, open := tx.OpenLiveTicket(sid)
+	if !open {
+		lt = model.Ticket{ID: fmt.Sprintf("T%d", time.Now().UnixNano()%1e8), Kind: "live", Topic: kind + "_review", CustomerID: o.CustomerID, SessionID: sid,
+			Summary: fmt.Sprintf("Review %s for %s ($%.2f): %s. Customer said: %s", kind, o.ID, o.Total, why, reason), Status: "waiting", CreatedAt: time.Now().UTC()}
+		tx.PutTicket(lt)
+	}
+	st := t.standingTx(tx, o.CustomerID)
+	ask := "They'll ask a couple of quick questions about the item's condition"
+	if noReturn {
+		ask = "They'll check the delivery with the courier"
+	} else if o.Total > st.PhotoOver {
+		ask += " and ask for a photo of it"
+	}
+	res.OK, res.Escalated, res.Guardrail, res.Ticket = true, true, guardrail, &lt
+	res.Message = fmt.Sprintf("%s I'm connecting you with a teammate right now, here in this chat. %s before approving.", say, ask)
+}
+
+// startReturn issues the RMA, or hands the return to a teammate when a guardrail fires.
 // The refund always waits for the item (RefundOnReceipt).
 func (t *Tools) startReturn(tx *store.Txn, o model.Order, reason, sid string, res *ToolResult) {
 	o.RefundOnReceipt, o.ReturnStartedAt = true, time.Now().UTC()
-	if why, g := t.returnGuard(tx, o); why != "" {
+	if why, g, say := t.returnGuard(tx, o); why != "" {
 		o.Status = "return_pending_approval"
 		tx.PutOrder(o)
-		tk := t.hold(tx, o, "return", o.Total, why, reason, sid, "delivered", false)
-		res.Escalated, res.Guardrail = true, g
-		res.Message = fmt.Sprintf("Because %s, I've sent your return for %s to a teammate (ticket %s). Once they approve it you'll get the RMA and a prepaid label, and your $%.2f refund is released when the item reaches us.", why, o.ID, tk, o.Total)
+		t.toHuman(tx, o, "return", why, g, say, reason, sid, "delivered", false, res)
 		return
 	}
 	o.Status, o.RMA = "return_requested", rma(o.ID)
@@ -298,10 +324,14 @@ func (t *Tools) search(q string, lo, hi *float64) ToolResult {
 	if err != nil {
 		return ToolResult{Message: err.Error()}
 	}
-	res := ToolResult{OK: len(hits) > 0, Retrieval: &info}
+	res := ToolResult{Retrieval: &info}
+	bad := t.suspendedSellers() // keep suspended sellers out of results
 	for i := range hits {
-		res.Products = append(res.Products, t.card(hits[i].ID, &hits[i]))
+		if c := t.card(hits[i].ID, &hits[i]); !bad[c.Seller] {
+			res.Products = append(res.Products, c)
+		}
 	}
+	res.OK = len(res.Products) > 0
 	return res
 }
 
@@ -396,13 +426,13 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 				return nil
 			}
 			res.OK = true
+			if why, _, _ := t.returnGuard(tx, o); why != "" { // nothing for the customer to confirm: a person takes it from here
+				t.startReturn(tx, o, reason, sid, &res)
+				break
+			}
 			if !commit {
 				res.NeedsConfirm = true
-				if why, _ := t.returnGuard(tx, o); why != "" {
-					res.Message = fmt.Sprintf("send your return for order %s ($%.2f) to a teammate for approval, because %s. After approval you get a prepaid label, and the refund is released once the item reaches us", oid, o.Total, why)
-				} else {
-					res.Message = fmt.Sprintf("start a return for order %s and email you a prepaid label. Your $%.2f refund is released as soon as the item reaches us", oid, o.Total)
-				}
+				res.Message = fmt.Sprintf("start a return for order %s and email you a prepaid label. Your $%.2f refund is released as soon as the item reaches us", oid, o.Total)
 				if t.inStock(tx, o) && o.ReplacementFor == "" {
 					res.Choices = []Choice{{"Send a free replacement instead", "replace " + oid}}
 				}
@@ -422,6 +452,11 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 			}
 			if msg := t.notReturnable(o, age, "replace"); msg != "" {
 				deny(msg)
+				return nil
+			}
+			if st := t.standingTx(tx, cid); st.Tier == "watch" || st.Tier == "blocked" {
+				deny("Replacements on your account are reviewed by a teammate. I can connect you with one now.")
+				res.Choices, res.Guardrail = []Choice{{"Talk to a person", "talk to a person"}}, "account_review"
 				return nil
 			}
 			if !t.inStock(tx, o) {
@@ -484,22 +519,22 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 			case "return_received": // the item is back: money can move now
 				why, g := t.refundGuard(tx, o)
 				res.OK = true
-				if !commit {
-					res.NeedsConfirm = true
-					if why != "" {
-						res.Message = fmt.Sprintf("send your $%.2f refund for order %s to a teammate for approval (%s)", o.Total, oid, why)
-					} else {
-						res.Message = fmt.Sprintf("refund $%.2f for order %s to your original payment method (we've received the item)", o.Total, oid)
-					}
-					return nil
-				}
-				if why != "" {
+				if why != "" { // a person reviews it with the customer, now
 					o.Status = "refund_pending_approval"
 					tx.PutOrder(o)
-					tk := t.hold(tx, o, "refund", o.Total, why, reason, sid, "return_received", false)
-					res.Escalated, res.Guardrail = true, g
-					res.Message = fmt.Sprintf("I've sent your $%.2f refund for %s to a teammate for approval because %s (ticket %s). Most are decided within a few hours, and you'll get an email.", o.Total, oid, why, tk)
-				} else {
+					say := fmt.Sprintf("We've received the item. This refund is $%.2f, which is above our $%.0f limit for automatic refunds.", o.Total, t.AutoRefundLimit)
+					if g == "velocity_limit" {
+						say = "We've received the item. You've had several refunds in the last day, so a teammate reviews this one."
+					}
+					t.toHuman(tx, o, "refund", why, g, say, reason, sid, "return_received", false, &res)
+					break
+				}
+				if !commit {
+					res.NeedsConfirm = true
+					res.Message = fmt.Sprintf("refund $%.2f for order %s to your original payment method (we've received the item)", o.Total, oid)
+					return nil
+				}
+				{
 					rf := issueRefund(tx, o, reason)
 					res.Refund, res.Committed = &rf, true
 					res.Message = fmt.Sprintf("Done — $%.2f refunded for order %s (refund %s, 5-7 business days).", o.Total, oid, rf.ID)
@@ -522,16 +557,9 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 				res.Message = fmt.Sprintf("All set: your $%.2f refund for %s is released as soon as the returned item reaches us.", o.Total, oid)
 			case "delivered":
 				if notReceivedRe.MatchString(reason) { // nothing to return: a person checks with the courier
-					res.OK = true
-					if !commit {
-						res.NeedsConfirm = true
-						res.Message = fmt.Sprintf("send a missing-item claim for order %s ($%.2f) to a teammate. They check with the courier and refund you without a return if it was lost", oid, o.Total)
-						return nil
-					}
-					tk := t.hold(tx, o, "refund", o.Total, "item reported not received: a teammate checks with the courier", reason, sid, "delivered", true)
-					res.Escalated, res.Guardrail = true, "not_received_claim"
-					res.Message = fmt.Sprintf("I've opened a missing-item claim for %s (ticket %s). A teammate checks with the courier, usually within a day, and refunds $%.2f if it was lost.", oid, tk, o.Total)
-					return nil
+					t.toHuman(tx, o, "refund", "item reported not received: check with the courier", "not_received_claim",
+						fmt.Sprintf("I'm sorry order %s hasn't reached you. I've opened a missing-item claim.", oid), reason, sid, "delivered", true, &res)
+					break
 				}
 				if age > t.ReturnWindow {
 					deny(fmt.Sprintf("Order %s was delivered %d days ago, outside the %d-day refund window. Your item may still be covered by the 1-year warranty.", oid, age, t.ReturnWindow))
@@ -540,13 +568,13 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 				}
 				// Delivered and in the window: the refund needs the item back first.
 				res.OK = true
+				if why, _, _ := t.returnGuard(tx, o); why != "" {
+					t.startReturn(tx, o, reason, sid, &res)
+					break
+				}
 				if !commit {
 					res.NeedsConfirm = true
-					if why, _ := t.returnGuard(tx, o); why != "" {
-						res.Message = fmt.Sprintf("send a return for order %s ($%.2f) to a teammate for approval, because %s. Refunds need the item back: after approval you get a prepaid label, and the money is released once the item reaches us", oid, o.Total, why)
-					} else {
-						res.Message = fmt.Sprintf("start a return for order %s (prepaid label by email). Your $%.2f refund is released once the item reaches us", oid, o.Total)
-					}
+					res.Message = fmt.Sprintf("start a return for order %s (prepaid label by email). Refunds need the item back: your $%.2f is released once it reaches us", oid, o.Total)
 					if t.inStock(tx, o) && o.ReplacementFor == "" {
 						res.Choices = []Choice{{"Send a free replacement instead", "replace " + oid}}
 					}
@@ -708,6 +736,7 @@ func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) To
 	var res ToolResult
 	var stock map[string]int
 	var cat string
+	bad := t.suspendedSellers()
 	err := t.S.Tx(func(tx *store.Txn) error {
 		p, ok := tx.Product(pid)
 		if !ok {
@@ -715,6 +744,11 @@ func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) To
 			return nil
 		}
 		cat = p.Category
+		if seller := seed.SellerFor(p.Category); bad[seller] {
+			res = ToolResult{Message: fmt.Sprintf("Sorry, we've paused sales from %s while we review quality complaints, so I can't order %s right now.", seller, p.Name),
+				Guardrail: "seller_suspended"}
+			return nil
+		}
 		c := t.card(pid, nil)
 		c.Stock = p.Stock
 		res.Products = []Card{c}
@@ -744,6 +778,8 @@ func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) To
 			}
 		}
 		switch {
+		case t.standingTx(tx, cid).Tier == "blocked":
+			why, g = "new orders on this account get a quick teammate review", "account_review"
 		case total > over:
 			why, g = fmt.Sprintf("orders over $%.0f get a quick teammate review", over), "order_review_amount"
 		case recent >= perDay:
@@ -801,10 +837,10 @@ func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) To
 		return ToolResult{Message: "Sorry, I couldn't place that order. You weren't charged. Please try again."}
 	}
 	t.mirrorStock(stock)
-	if res.Guardrail == "out_of_stock" { // suggest in-stock alternatives in the same category
+	if res.Guardrail == "out_of_stock" || res.Guardrail == "seller_suspended" { // suggest in-stock alternatives
 		hits, _, _ := t.R.SearchProducts(search.ProductQuery{Query: cat})
 		for _, h := range hits {
-			if c := t.card(h.ID, nil); c.ID != pid && c.Stock > 0 && c.Category == cat && len(res.Choices) < 3 {
+			if c := t.card(h.ID, nil); c.ID != pid && c.Stock > 0 && c.Category == cat && !bad[c.Seller] && len(res.Choices) < 3 {
 				res.Products = append(res.Products, c)
 				res.Choices = append(res.Choices, Choice{"Order " + c.Name, "order " + c.ID})
 			}
@@ -1038,7 +1074,18 @@ func (t *Tools) ReceiveReturn(oid, by string) (string, error) {
 }
 
 // DecideApproval is the human agent's action on held work (admin page / teammate).
-func (t *Tools) DecideApproval(id string, approve bool, by string) (model.Approval, error) {
+// Decision is what the teammate records: what they found, and why.
+type Decision struct {
+	Approve   bool
+	Condition string // unused | defective | used | not_received (required to approve a return or refund)
+	Note      string
+}
+
+// DecideApproval applies a teammate's decision. Returns and refunds can't be approved
+// without recording the item's condition, and above the customer's photo threshold
+// not without a photo of the item (a person has to actually look at it).
+func (t *Tools) DecideApproval(id string, d Decision, by string) (model.Approval, error) {
+	approve := d.Approve
 	var out model.Approval
 	var stock map[string]int
 	err := t.S.Tx(func(tx *store.Txn) error {
@@ -1050,6 +1097,28 @@ func (t *Tools) DecideApproval(id string, approve bool, by string) (model.Approv
 			return fmt.Errorf("approval %s is already %s", id, a.Status)
 		}
 		o, _ := tx.Order(a.OrderID)
+		if approve && (a.Kind == "" || a.Kind == "refund" || a.Kind == "return") {
+			cond := strings.ToLower(strings.TrimSpace(d.Condition))
+			if a.NoReturn && cond == "" {
+				cond = "not_received"
+			}
+			switch cond {
+			case "unused", "defective", "not_received":
+			case "used":
+				if strings.TrimSpace(d.Note) == "" {
+					return fmt.Errorf("the item was used: add a note explaining why the return is approved anyway")
+				}
+			case "":
+				return fmt.Errorf("record the item's condition (unused, defective or used) before approving")
+			default:
+				return fmt.Errorf("unknown condition %q", d.Condition)
+			}
+			if st := t.standingTx(tx, a.CustomerID); !a.NoReturn && a.Amount > st.PhotoOver && len(a.Evidence) == 0 {
+				return fmt.Errorf("ask the customer for a photo of the item first ($%.0f is above the $%.0f photo threshold for this customer)", a.Amount, st.PhotoOver)
+			}
+			a.Condition = cond
+		}
+		a.Note = strings.TrimSpace(d.Note)
 		a.DecidedBy, a.DecidedAt = by, time.Now().UTC()
 		switch a.Kind {
 		case "order", "replacement": // a held order: ship it, or cancel it and put the stock back

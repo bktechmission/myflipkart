@@ -52,6 +52,7 @@ type Store struct {
 	feedback []model.Feedback
 	evFile   *os.File
 	convMu   sync.Mutex
+	mem      map[string][]byte // photos for memory-only stores (evals)
 }
 
 type rec struct {
@@ -271,6 +272,30 @@ func (t *Txn) RefundsSince(cid string, since time.Time) int {
 	return n
 }
 
+// OpenLiveTicket finds the conversation's open live ticket inside the transaction.
+func (t *Txn) OpenLiveTicket(sid string) (model.Ticket, bool) {
+	for i := len(t.recs) - 1; i >= 0; i-- {
+		if k := t.recs[i].Ticket; k != nil && k.SessionID == sid && k.Kind == "live" && k.Status != "closed" {
+			return *k, true
+		}
+	}
+	for _, k := range t.s.tickets {
+		if k.SessionID == sid && k.Kind == "live" && k.Status != "closed" {
+			return k, true
+		}
+	}
+	return model.Ticket{}, false
+}
+
+// Approvals and tickets as the transaction sees them (for customer/seller standing).
+func (t *Txn) AllApprovals() []model.Approval {
+	out := make([]model.Approval, 0, len(t.s.approvals))
+	for _, a := range t.s.approvals {
+		out = append(out, a)
+	}
+	return out
+}
+
 // Product reads a product inside the transaction (stock is checked and decremented under the lock).
 func (t *Txn) Product(id string) (model.Product, bool) {
 	for i := len(t.recs) - 1; i >= 0; i-- {
@@ -473,6 +498,17 @@ func (s *Store) OrdersFor(cid string) []model.Order {
 	return out
 }
 
+// AllOrders returns every order (seller scorecards).
+func (s *Store) AllOrders() []model.Order {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]model.Order, 0, len(s.orders))
+	for _, o := range s.orders {
+		out = append(out, o)
+	}
+	return out
+}
+
 // AwaitingReturn lists orders whose item is on its way back to the warehouse.
 func (s *Store) AwaitingReturn() []model.Order {
 	s.mu.RLock()
@@ -569,6 +605,60 @@ func (s *Store) OpenLiveTicket(sid string) (model.Ticket, bool) {
 		}
 	}
 	return model.Ticket{}, false
+}
+
+// AttachEvidence adds an uploaded photo to the customer's pending return/refund approvals.
+func (s *Store) AttachEvidence(cid, photoID string) []string {
+	var ids []string
+	s.Tx(func(tx *Txn) error {
+		for _, a := range tx.AllApprovals() {
+			if a.CustomerID == cid && a.Status == "pending" && (a.Kind == "return" || a.Kind == "refund" || a.Kind == "") {
+				a.Evidence = append(a.Evidence, photoID)
+				tx.PutApproval(a)
+				ids = append(ids, a.ID)
+			}
+		}
+		return nil
+	})
+	return ids
+}
+
+// Photos: customer uploads (re-encoded JPEG, metadata stripped) under photos/<cid>/<id>.jpg.
+var photoIDRe = regexp.MustCompile(`^[a-f0-9]{16}$`)
+
+func (s *Store) SavePhoto(cid, id string, jpeg []byte) error {
+	if !cidRe.MatchString(cid) || !photoIDRe.MatchString(id) {
+		return errors.New("bad photo key")
+	}
+	if s.dir == "" {
+		s.convMu.Lock()
+		if s.mem == nil {
+			s.mem = map[string][]byte{}
+		}
+		s.mem[cid+"/"+id] = jpeg
+		s.convMu.Unlock()
+		return nil
+	}
+	dir := filepath.Join(s.dir, "photos", cid)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, id+".jpg"), jpeg, 0o600)
+}
+
+func (s *Store) Photo(cid, id string) ([]byte, error) {
+	if !cidRe.MatchString(cid) || !photoIDRe.MatchString(id) {
+		return nil, errors.New("bad photo key")
+	}
+	if s.dir == "" {
+		s.convMu.Lock()
+		defer s.convMu.Unlock()
+		if b, ok := s.mem[cid+"/"+id]; ok {
+			return b, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	return os.ReadFile(filepath.Join(s.dir, "photos", cid, id+".jpg"))
 }
 
 // SaveTicket durably writes a ticket's new state.

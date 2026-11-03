@@ -67,6 +67,9 @@ type Approval struct {
 	Kind       string    `json:"kind,omitempty"`      // "" or refund | return | order (large/fast orders) | replacement
 	NoReturn   bool      `json:"no_return,omitempty"` // item reported not received: refund on approval
 	Refunded   bool      `json:"refunded,omitempty"`  // money actually moved when decided
+	Evidence   []string  `json:"evidence,omitempty"`  // photo IDs the customer uploaded for this request
+	Condition  string    `json:"condition,omitempty"` // what the teammate found: unused | defective | used | not_received
+	Note       string    `json:"note,omitempty"`      // the teammate's decision note
 	OrderID    string    `json:"order_id"`
 	CustomerID string    `json:"customer_id"`
 	SessionID  string    `json:"session_id,omitempty"` // conversation to notify when decided

@@ -34,16 +34,17 @@ func (s *Server) approvals(w http.ResponseWriter, r *http.Request, _ *auth.Sessi
 	if ret == nil {
 		ret = []model.Order{}
 	}
-	writeJSON(w, 200, map[string]any{"approvals": out, "tickets": s.store.Tickets(), "limit": s.cfg.AutoRefundLimit, "returns": ret})
+	writeJSON(w, 200, map[string]any{"approvals": out, "tickets": s.store.Tickets(), "limit": s.cfg.AutoRefundLimit, "returns": ret,
+		"sellers": s.tools.Sellers()})
 }
 
 func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
-	var in struct{ Decision string }
+	var in struct{ Decision, Condition, Note string }
 	if json.NewDecoder(r.Body).Decode(&in) != nil || (in.Decision != "approve" && in.Decision != "reject") {
 		writeJSON(w, 400, map[string]string{"error": "decision must be approve or reject"})
 		return
 	}
-	a, err := s.tools.DecideApproval(r.PathValue("id"), in.Decision == "approve", sess.Email)
+	a, err := s.tools.DecideApproval(r.PathValue("id"), agent.Decision{Approve: in.Decision == "approve", Condition: in.Condition, Note: in.Note}, sess.Email)
 	if err != nil {
 		writeJSON(w, 409, map[string]string{"error": err.Error()})
 		return

@@ -253,6 +253,8 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 	switch { // close the loop: ask for feedback when the issue is resolved or handed to a human
 	case resp.Result.Committed:
 		resp.AskFeedback = "resolved"
+	case resp.Result.Ticket != nil && resp.Result.Ticket.Kind == "live":
+		// a teammate is joining this chat: feedback is asked when they close it
 	case resp.Result.Escalated && !resp.NeedsConfirm:
 		resp.AskFeedback = "escalated"
 		// handoff: feedback is asked when the human agent closes the chat (package live)
@@ -315,7 +317,7 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 	a.Store.LogEvent(model.Event{TS: time.Now().UTC(), CustomerID: cid, SessionID: sid, Query: text, Tool: resp.Tool,
 		Path: resp.Trace.Path, Router: route.Router, Model: route.Model, OK: resp.OK, Status: 200, Error: route.Err,
 		NResults: n, LatencyMS: resp.Trace.LatencyMS, TTFTMS: ttft, Tokens: resp.Trace.Tokens, Source: a.Source,
-		Resolved: resp.Result.Committed, Handoff: (resp.Tool == "handoff" || resp.Tool == "file_complaint") && resp.OK && resp.Result.Ticket != nil,
+		Resolved: resp.Result.Committed, Handoff: resp.OK && resp.Result.Ticket != nil && resp.Result.Ticket.Kind == "live",
 		Escalated: resp.Result.Escalated && !resp.NeedsConfirm, Variant: a.Variant, Flags: flags})
 	return resp
 }

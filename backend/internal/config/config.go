@@ -119,7 +119,7 @@ func Load() Config {
 		DailyTokenQuota:    int(envF("DAILY_TOKEN_QUOTA", 200000)),
 		ReturnWindowDays:   30,
 		DemoOrdersFor:      strings.ToLower(os.Getenv("DEMO_ORDERS_FOR")),
-		AutoRefundLimit:    envF("AUTO_REFUND_LIMIT", 30),
+		AutoRefundLimit:    envF("AUTO_REFUND_LIMIT", 29),
 		MaxAutoRefunds:     int(envF("MAX_AUTO_REFUNDS_PER_DAY", 3)),
 		CanaryPercent:      int(envF("CANARY_PERCENT", 0)),
 		CanaryModel:        os.Getenv("CANARY_LLM_MODEL"),

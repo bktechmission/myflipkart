@@ -29,7 +29,10 @@ Ask Sauby is the shopping assistant for **MyFlipKart.com**, a fictional store. I
 6. **Act safely.** Order tools (track, list, buy, cancel, return, replace, refund, complain) only ever see the session's own orders.
    - Nothing changes until the customer says *yes*.
    - **No refund without the item.** A refund is released only when the warehouse scans the returned item (or a teammate confirms it never arrived).
-   - Returns over **$30**, and any return beyond **3 in 30 days**, go to a person before a label is issued.
+   - Returns over **$29**, and any return beyond **3 in 30 days**, are handed to a person **in the same chat, right away**, with the reason ("above the $29 automatic limit", "3 returns already this month").
+   - The teammate **investigates before approving**: unused, defective or used? All accessories? Above **$150** ($300 for loyal customers) they ask for a **photo**, uploaded in the chat. The server refuses an approval without a recorded condition, or without a photo above the threshold. Used items that aren't faulty are declined, with the warranty offered instead.
+   - **Customer standing:** loyal customers (5+ orders, few returns) get a higher photo threshold. Declined requests, missing-item claims or a high return rate put an account on *watch* (every return goes to a person) or *blocked* (new orders are reviewed too).
+   - **Seller standing:** low ratings, a high return rate or repeated complaints flag a seller. Suspended sellers are hidden from search and can't take orders.
    - A **replacement** is offered before a return. Orders over $1000, more than 3 orders a day, and replacements over $500 get a teammate review. Stock is checked under the lock, so the last unit is never sold twice.
    - Seller complaints and missing items go straight to a person. Answering **No** to "Did this solve your issue?" connects a teammate immediately.
    - Each action is one transaction, re-checked under the lock, and one refund per order, ever.
@@ -64,7 +67,7 @@ The demo runs on one machine with no infrastructure. Each component sits behind 
 | Retrieval | precision@5, recall@5, hit@5, MRR, nDCG@10, overall and by query type (keyword, semantic, price, policy) |
 | Routing | tool confusion matrix, per-tool precision / recall / F1, argument accuracy |
 | Outcomes | resolution, deflection, handoff, escalation, recontact within 72 h, CSAT, feedback response rate, per agent version |
-| Safety | no cross-customer leaks, confirm before commit, refunds over $30 escalated, grounded answers, exactly-once refunds under concurrency |
+| Safety | no cross-customer leaks, confirm before commit, returns over $29 handed to a person, condition + photo required to approve, grounded answers, exactly-once refunds under concurrency |
 | Ops | p50 / p95 / p99 per path against SLOs (FAQ p95 < 1 s, p99 < 5 s; orders and refunds p95 < 5 s, p99 < 30 s), time to first status, availability against 99.99%, handoff wait, tokens and cost |
 
 ### Evals and release gates
@@ -137,8 +140,9 @@ ollama pull qwen2.5:3b && ollama pull nomic-embed-text
 - "Where is my latest order?"
 - "Tell me about P1020", then "place order this"
 - "What hasn't been delivered yet?"
-- "Return O5009" (under $30: label now, refund when the item arrives — or tap **Send a free replacement instead**)
-- "I want a refund for O5008" (over $30: the return goes to a teammate first)
+- "Return O5009" (under $29: label now, refund when the item arrives — or tap **Send a free replacement instead**)
+- "I want a refund for O5008" (over $29: a teammate joins the chat, asks about the item's condition and approves)
+- Return something over $150 as Meera: the teammate asks for a photo; tap the camera button to share one.
 - Admin → Approvals → **Returns on the way back** → *Mark received* to simulate the warehouse scan that releases a refund.
 - "The seller sent me a fake item on O5005" (complaint: a teammate joins)
 - "Talk to a person". Then open Admin → Live chats in another window and join, or wait for the Demo teammate.
