@@ -1,0 +1,7 @@
+.env
+data/
+bin/
+web/node_modules/
+web/public/dist/
+*.pem
+.DS_Store

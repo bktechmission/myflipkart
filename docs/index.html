@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+  Ask Sauby · MyFlipKart.com — how it works (animated walkthrough)
+  Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Ask Sauby works</title>
+<meta name="description" content="An animated walkthrough of a RAG shopping assistant: hybrid search, reranking, an LLM router, guarded refunds, human handoff, and evals.">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark">S</span>Ask Sauby</div>
+  <nav><a href="https://github.com/bktechmission/myflipkart">Code on GitHub</a>
+    <button class="iconbtn" id="theme" aria-label="Switch theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button></nav>
+</header>
+
+<main>
+  <section class="intro">
+    <h1>What happens when a customer asks a question</h1>
+    <p>Ask Sauby is an educational support assistant for a fictional store. Pick a request and watch it travel through search, the LLM, guardrails, people and data stores.</p>
+  </section>
+
+  <div class="scenarios" id="scenarios" role="tablist"></div>
+
+  <section class="stage">
+    <div class="phone" aria-label="Customer chat">
+      <div class="phone-top"><span class="mark sm">S</span>Ask Sauby</div>
+      <div class="chat" id="chat" aria-live="polite"></div>
+    </div>
+    <div class="right">
+      <svg id="board" viewBox="0 0 1000 570" role="img" aria-label="System components"></svg>
+      <div class="explain">
+        <p id="caption"></p>
+        <p id="detail" class="detail"></p>
+        <div class="controls">
+          <button id="prev" class="btn ghost">Back</button>
+          <button id="play" class="btn">Pause</button>
+          <button id="next" class="btn ghost">Next</button>
+          <div class="steps" id="steps"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="legend">
+    <span><i class="k-edge"></i>Edge and identity</span><span><i class="k-core"></i>Go server</span><span><i class="k-llm"></i>LLM</span>
+    <span><i class="k-rag"></i>Retrieval</span><span><i class="k-human"></i>Guardrails and people</span><span><i class="k-data"></i>Data stores</span><span><i class="k-loop"></i>Evals</span>
+  </section>
+
+  <section class="measure">
+    <h2>What we measure</h2>
+    <div class="mgrid" id="metrics"></div>
+  </section>
+
+  <section class="arch">
+    <h2>Architecture</h2>
+    <img src="architecture.png" alt="Architecture diagram: customer and edge, Go server with orchestrator and LLM gateway, retrieval tools, data stores, and the improvement loop">
+    <p class="detail">Source: <a href="architecture.excalidraw">architecture.excalidraw</a> — open it at excalidraw.com to edit.</p>
+  </section>
+</main>
+<footer>Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake · MyFlipKart.com is a fictional demo store.</footer>
+<script type="module" src="assets/flow.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# Ask Sauby · MyFlipKart.com — CI: build, vet, type-check, and the eval release gates.
+# Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build-and-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Go vet + build
+        working-directory: backend
+        run: |
+          test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+          go vet ./...
+          go build ./...
+      - name: TypeScript (app + walkthrough)
+        run: |
+          cd web && npm ci && npx tsc -p . && npx tsc -p ../docs
+      - name: Evals and release gates (offline, rules router)
+        working-directory: backend
+        run: DATA_DIR=${{ runner.temp }}/data ROUTER=rules EMBED_BACKEND=hash go run ./cmd/evals -gate -label ci

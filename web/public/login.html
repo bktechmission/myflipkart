@@ -1,0 +1,32 @@
+<!doctype html>
+<!--
+  Ask Sauby · MyFlipKart.com — sign in
+  Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Ask Sauby</title>
+<script src="/dist/theme.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<button class="iconbtn" id="theme" aria-label="Switch theme" style="position:fixed;top:14px;right:14px"></button>
+<section class="login">
+  <div class="box2">
+    <div class="brand"><span class="mark">S</span>Ask Sauby</div>
+    <h1>Shopping help from MyFlipKart.com</h1>
+    <p class="muted">Sign in to track, cancel or return your orders. Guests can browse and ask questions.</p>
+    <div class="stack">
+      <a class="btn" id="google" href="/auth/login?provider=google">Continue with Google</a>
+      <a class="btn ghost" id="mock" href="/auth/login?provider=mock">Continue with a demo account</a>
+      <button class="btn ghost" id="guest">Browse as guest</button>
+    </div>
+    <p class="muted hide" id="googleHint" style="font-size:13px;margin-top:10px">Google sign-in isn't set up on this server.</p>
+    <div class="err hide" id="err"></div>
+  </div>
+</section>
+<script type="module" src="/dist/login.js"></script>
+</body>
+</html>

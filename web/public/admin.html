@@ -1,0 +1,145 @@
+<!doctype html>
+<!--
+  Ask Sauby · MyFlipKart.com — admin console (ops, business metrics, live chats, evals, knowledge base)
+  Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask Sauby Admin · MyFlipKart.com</title>
+<script src="/dist/theme.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="row" style="justify-content:space-between">
+    <div class="brand"><span class="mark">S</span>Ask Sauby admin</div>
+    <div class="row"><span class="muted" id="health" style="font-size:13px"></span>
+      <a class="btn ghost sm" href="/"><span data-icon="chat"></span>Chat</a>
+      <button class="btn ghost sm" id="resetOrders">Reset demo data</button>
+      <button class="iconbtn" id="theme" aria-label="Switch theme"></button>
+      <form method="post" action="/auth/logout"><button class="iconbtn" data-icon="logout" title="Sign out" aria-label="Sign out"></button></form></div>
+  </header>
+  <nav class="tabs" id="tabs">
+    <button class="tab on" data-t="ops"><span data-icon="admin"></span>Ops</button>
+    <button class="tab" data-t="biz"><span data-icon="up"></span>Business</button>
+    <button class="tab" data-t="live"><span data-icon="headset"></span>Live chats <span id="liveBadge" class="pill hide"></span></button>
+    <button class="tab" data-t="approvals"><span data-icon="refund"></span>Approvals <span id="pendingBadge" class="pill hide"></span></button>
+    <button class="tab" data-t="insights"><span data-icon="bulb"></span>Insights</button>
+    <button class="tab" data-t="evals"><span data-icon="flask"></span>Evals</button>
+    <button class="tab" data-t="knowledge"><span data-icon="book"></span>Knowledge</button>
+  </nav>
+
+  <section id="t-ops">
+    <div class="g k4" id="opsKpis"></div>
+    <div class="card" style="margin-top:12px"><h3>Latency SLOs by path</h3>
+      <p class="note">FAQ path (search, price, policy): p95 &lt; 1s, p99 &lt; 5s. Transaction path (orders, cancel, return, refund): p95 &lt; 5s, p99 &lt; 30s. First status = time until the customer sees Sauby working.</p>
+      <div class="scroll"><table id="sloTable"></table></div></div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Turns per hour (24h)</h3><div id="perHour"></div></div>
+      <div class="card"><h3>Tool mix</h3><div id="toolMix"></div></div>
+    </div>
+    <div class="card" style="margin-top:12px"><h3>Recent turns</h3><div class="scroll"><table id="recent"></table></div></div>
+  </section>
+
+  <section id="t-biz" class="hide">
+    <div class="g k4" id="bizKpis"></div>
+    <div class="card" style="margin-top:12px"><h3>How these are measured</h3>
+      <p class="note" style="margin:0">Per conversation (cid + sid): <b>handoff</b> = customer asked for a human; <b>escalation</b> = a guardrail sent it to a human (e.g. refund over the limit);
+      <b>deflection</b> = no human involved; <b>resolution</b> = deflected and the task got done (order action committed or thumbs-up) with no thumbs-down;
+      <b>recontact</b> = a closed conversation followed by another one from the same customer within 72h (proxy for "didn't really solve it");
+      <b>CSAT</b> = thumbs-up share of feedback, which Sauby asks for after every resolution, escalation and handoff.</p></div>
+    <div class="card" style="margin-top:12px"><h3>Agent versions (canary vs control)</h3>
+      <p class="note">Sessions are pinned to one version by session hash. Promote the canary only if it matches or beats control here and passes the eval gates.</p>
+      <div class="scroll"><table id="variants"></table></div></div>
+    <div class="card" style="margin-top:12px"><h3>Guardrails fired</h3><div id="guards"></div></div>
+  </section>
+
+  <section id="t-live" class="hide">
+    <div class="livegrid">
+      <div class="card"><h3>Queue</h3><p class="note" id="liveNote"></p><div id="liveList"></div></div>
+      <div class="card live-thread"><div class="row" style="justify-content:space-between"><h3 id="liveTitle">Pick a chat</h3>
+        <div class="row"><button class="btn sm hide" id="liveJoin">Join chat</button><button class="btn ghost sm hide" id="liveClose">Close and hand back</button></div></div>
+        <div class="msgs" id="liveMsgs"></div>
+        <form class="row hide" id="liveForm" style="margin-top:8px;flex-wrap:nowrap"><input class="inp" id="liveText" placeholder="Reply to the customer" style="flex:1"><button class="btn sm">Send</button></form></div>
+      <div class="card"><h3>Customer context</h3><div id="liveCtx" class="muted">Sauby sends the customer, session and conversation with every handoff.</div></div>
+    </div>
+  </section>
+
+  <section id="t-approvals" class="hide">
+    <div class="card"><h3>Refunds waiting for a human</h3>
+      <p class="note" id="apNote"></p><div class="scroll"><table id="pending"></table></div></div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Decided</h3><div class="scroll"><table id="decided"></table></div></div>
+      <div class="card"><h3>Handoff tickets</h3><div class="scroll"><table id="tickets"></table></div></div>
+    </div>
+  </section>
+
+  <section id="t-insights" class="hide">
+    <div class="card"><h3>What to fix next (last 7 days)</h3><ul id="actions" style="margin:0;padding-left:18px"></ul></div>
+    <div class="card" style="margin-top:12px"><h3>Continuous improvement loop</h3>
+      <p class="note" style="margin:0">1. Mine failures below (zero results, handoffs, thumbs-down) → 2. read the transcript, fix knowledge or label the expected tool → 3. <b>Add to golden set</b> (data/golden_extra.jsonl)
+      → 4. build a candidate agent (prompt, model, retrieval knobs) → 5. run evals; it must pass every release gate → 6. canary to a % of sessions, compare Business metrics → 7. promote or roll back.</p></div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Searches with zero results</h3><div class="scroll"><table id="zero"></table></div></div>
+      <div class="card"><h3>Questions that ended in a handoff</h3><div class="scroll"><table id="handoffs"></table></div></div>
+    </div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Thumbs-down conversations</h3><div class="scroll"><table id="down"></table></div></div>
+      <div class="card"><h3>Failed order actions</h3><div class="scroll"><table id="failedTx"></table></div></div>
+    </div>
+  </section>
+
+  <section id="t-evals" class="hide">
+    <div class="card row"><strong>Run evals</strong>
+      <select class="inp" id="suite"><option value="all">all suites</option><option>retrieval</option><option>router</option><option>e2e</option></select>
+      <select class="inp" id="router"><option value="">router: server default</option><option value="rules">rules</option><option value="llm">llm (gateway)</option></select>
+      <input class="inp" id="label" placeholder="label, e.g. POLICY_K=5">
+      <button class="btn" id="run">Run</button><span id="estate" class="muted"></span></div>
+    <div class="g k4" id="evalKpis" style="margin-top:12px"></div>
+    <div class="card" style="margin-top:12px"><h3>Release gates</h3><p class="note">A candidate agent ships only if every gate passes (thresholds in backend/evals/gates.json; CI runs <code>go run ./cmd/evals -gate</code>).</p>
+      <div class="scroll"><table id="gates"></table></div></div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Retrieval: config comparison</h3><p class="note">Precision@5 = relevant in top 5 ÷ 5 · Recall@5 = relevant in top 5 ÷ all relevant · MRR = 1 / rank of first hit.</p>
+        <div class="scroll"><table id="rtab"></table></div></div>
+      <div class="card"><h3>Recall@5 by query type</h3><div class="scroll"><table id="rtype"></table></div></div>
+    </div>
+    <div class="card" style="margin-top:12px"><h3>Per-query precision / recall matrix</h3>
+      <div class="row" style="margin-bottom:8px"><select class="inp" id="pqMetric"><option>recall@5</option><option>precision@5</option><option>mrr</option></select>
+        <select class="inp" id="pqType"><option value="">all types</option></select><span class="muted">Hover a cell for the retrieved IDs.</span></div>
+      <div class="scroll"><table id="pq"></table></div></div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Router confusion matrix</h3><p class="note" id="rnote"></p><div class="scroll"><table id="cm"></table></div></div>
+      <div class="card"><h3>Per-tool precision / recall / F1</h3><div class="scroll"><table id="pc"></table></div><div id="mist"></div></div>
+    </div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>End-to-end checks</h3><div id="e2eRates"></div><div class="scroll"><table id="e2e"></table></div></div>
+      <div class="card"><h3>Run history</h3><div class="scroll"><table id="hist"></table></div></div>
+    </div>
+  </section>
+
+  <section id="t-knowledge" class="hide">
+    <div class="card"><h3>Live index</h3><p class="note">Saving a policy or product rebuilds BM25 + vector indexes and swaps them in atomically; chats keep working during the rebuild.</p><div id="ixStats"></div></div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Policy documents</h3>
+        <div class="row"><select class="inp" id="polSel"></select><span class="muted" id="polMeta"></span></div>
+        <input class="inp" id="polTitle" style="width:100%;margin:8px 0">
+        <textarea class="inp" id="polBody" placeholder="One paragraph per block, separated by a blank line. Each paragraph becomes one RAG chunk."></textarea>
+        <div class="row" style="margin-top:8px"><button class="btn" id="polSave">Save &amp; re-index</button><span id="polMsg" class="muted"></span></div></div>
+      <div class="card"><h3>Product page</h3>
+        <div class="row"><select class="inp" id="prodSel"></select><a id="prodLink" target="_blank" rel="noopener">view page</a></div>
+        <label class="muted" style="font-size:12px">Price (USD)</label><input class="inp" id="prodPrice" type="number" min="1" step="0.01" style="width:100%">
+        <label class="muted" style="font-size:12px">Description</label><textarea class="inp" id="prodDesc" style="min-height:110px"></textarea>
+        <label class="muted" style="font-size:12px">Features (one per line)</label><textarea class="inp" id="prodFeat" style="min-height:90px"></textarea>
+        <div class="row" style="margin-top:8px"><button class="btn" id="prodSave">Save &amp; re-index</button><span id="prodMsg" class="muted"></span></div></div>
+    </div>
+    <div class="card" style="margin-top:12px"><h3>Test retrieval now</h3>
+      <div class="row"><input class="inp" id="probeQ" placeholder="e.g. how long do I have to return" style="flex:1"><select class="inp" id="probeIx"><option value="policies">policies</option><option value="products">products</option></select><button class="btn sm" id="probeGo">Search</button></div>
+      <div class="scroll" id="probeOut" style="margin-top:8px"></div></div>
+  </section>
+</div>
+<div class="modal hide" id="modal"><div class="card"><div class="row" style="justify-content:space-between"><h3 id="mTitle"></h3><button class="btn ghost sm" id="mClose">Close</button></div><div id="mBody"></div></div></div>
+<script type="module" src="/dist/admin.js"></script>
+</body>
+</html>

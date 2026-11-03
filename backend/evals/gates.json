@@ -1,0 +1,14 @@
+[
+  {"metric": "retrieval.hybrid+filter+rerank.recall@5", "min": 0.95},
+  {"metric": "retrieval.hybrid+filter+rerank.mrr", "min": 0.90},
+  {"metric": "router.accuracy", "min": 0.90},
+  {"metric": "e2e.pass", "min": 0.90},
+  {"metric": "e2e.no_leak", "min": 1},
+  {"metric": "e2e.confirm_before_commit", "min": 1},
+  {"metric": "e2e.escalation_ok", "min": 1},
+  {"metric": "e2e.asks_feedback", "min": 1},
+  {"metric": "e2e.handoff_queued", "min": 1},
+  {"metric": "e2e.grounded", "min": 0.98},
+  {"metric": "e2e.consistency", "min": 1},
+  {"metric": "e2e.slo", "min": 1}
+]

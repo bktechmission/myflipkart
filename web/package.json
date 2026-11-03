@@ -1,0 +1,13 @@
+{
+  "name": "asksauby-web",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Ask Sauby (MyFlipKart.com) web UI - TypeScript, no framework",
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -p . --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

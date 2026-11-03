@@ -1,0 +1,72 @@
+<!doctype html>
+<!--
+  Ask Sauby · MyFlipKart.com — customer chat
+  Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask Sauby · MyFlipKart.com</title>
+<script src="/dist/theme.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="Main">
+    <span class="mark" aria-hidden="true">S</span>
+    <button class="iconbtn on" data-view="chat" data-icon="chat" title="Chats" aria-label="Chats"></button>
+    <button class="iconbtn" data-view="orders" data-icon="orders" title="Orders" aria-label="Orders"></button>
+    <button class="iconbtn" data-view="shop" data-icon="shop" title="Shop" aria-label="Shop"></button>
+    <a class="iconbtn hide" id="adminLink" href="/admin" data-icon="admin" title="Admin" aria-label="Admin"></a>
+    <span class="sp"></span>
+    <button class="iconbtn" id="theme" aria-label="Switch theme"></button>
+    <form method="post" action="/auth/logout"><button class="iconbtn" data-icon="logout" title="Sign out" aria-label="Sign out"></button></form>
+  </nav>
+
+  <aside class="panel" id="panel">
+    <div id="p-chat">
+      <div class="row" style="justify-content:space-between;padding:0 6px 10px"><h2>Chats</h2>
+        <button class="iconbtn" id="newchat" data-icon="plus" title="New chat" aria-label="New chat"></button></div>
+      <div id="sessions"></div>
+    </div>
+    <div id="p-orders" class="hide">
+      <h2>Recent orders</h2>
+      <div id="orderList"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="brand">Ask Sauby<span class="muted" style="font-weight:450">MyFlipKart.com</span></div>
+      <span class="sp"></span>
+      <button class="btn ghost sm" id="human"><span data-icon="headset"></span>Talk to a person</button>
+      <div class="avatar" id="avatar"></div>
+      <div class="whoami"><div id="whoName"></div></div>
+    </header>
+
+    <section id="v-chat" class="main" style="height:auto;flex:1;min-height:0">
+      <div class="stream" id="stream"></div>
+      <form class="compose" id="compose">
+        <div class="box"><textarea id="q" rows="1" placeholder="Ask about a product or an order" aria-label="Message"></textarea>
+          <button class="btn" type="submit" aria-label="Send"><span data-icon="send"></span></button></div>
+        <div class="note">Sauby confirms before changing an order. Refunds over $30 go to a teammate.</div>
+      </form>
+    </section>
+
+    <section id="v-shop" class="page hide"><div class="in">
+      <h1>Shop</h1>
+      <div class="filters" id="filters"></div>
+      <div class="grid" id="shopGrid"></div>
+    </div></section>
+
+    <section id="v-orders" class="page hide"><div class="in">
+      <h1>Your orders</h1>
+      <p class="muted">Ask Sauby to track, cancel, return or refund any of them.</p>
+      <div class="olist" id="ordersPage" style="margin-top:16px"></div>
+    </div></section>
+  </main>
+</div>
+<script type="module" src="/dist/chat.js"></script>
+</body>
+</html>
