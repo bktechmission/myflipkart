@@ -1,6 +1,7 @@
 {
   "name": "asksauby-web",
   "private": true,
+  "license": "MIT",
   "version": "1.0.0",
   "description": "Ask Sauby (MyFlipKart.com) web UI - TypeScript, no framework",
   "scripts": {

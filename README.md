@@ -200,4 +200,4 @@ docs/                   GitHub Pages walkthrough + Excalidraw architecture
 
 Developed by **Bhupender Kumar Panwar** · Product Manager: **Saurabh Dahake**
 
-MyFlipKart.com and its products, customers and orders are fictional. The font is Instrument Sans (SIL Open Font License).
+Licensed under the [MIT License](LICENSE). Third-party components (the Instrument Sans font is SIL OFL 1.1) are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MyFlipKart.com and its products, customers and orders are fictional.
