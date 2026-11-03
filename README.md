@@ -8,7 +8,7 @@ Ask Sauby is the shopping assistant for **MyFlipKart.com**, a fictional store. I
 - human handoff;
 - metrics, evals and a loop for shipping better agents.
 
-**▶ [Try the live demo](https://asksauby.querika.ai)** · **[Watch a request flow through the system](https://bktechmission.github.io/myflipkart/)**: an animated walkthrough of search, refunds and human handoff.
+**▶ [Try the live demo](https://asksauby.onrender.com)** · **[Watch a request flow through the system](https://bktechmission.github.io/myflipkart/)**: an animated walkthrough of search, refunds and human handoff.
 
 ![Architecture](docs/architecture.png)
 
@@ -111,7 +111,7 @@ make setup
 make dev                       # MockID on :9000, Ask Sauby on http://localhost:8080
 ```
 
-Open http://localhost:8080 → **Continue with a demo account** → pick a customer:
+Open http://localhost:8080 (or the [live demo](https://asksauby.onrender.com)) → **Continue with a demo account** → pick a customer:
 
 | Demo account | Role | Has orders |
 |---|---|---|
@@ -147,7 +147,7 @@ MockID, the local demo provider in `backend/cmd/mockidp`, speaks the same OpenID
 
 ## Host it for free on Render
 
-The live demo runs at **https://asksauby.querika.ai** on Render's free tier, from the same [`Dockerfile`](Dockerfile) and the [`render.yaml`](render.yaml) Blueprint.
+The live demo runs at **https://asksauby.onrender.com** on Render's free tier, from the same [`Dockerfile`](Dockerfile) and the [`render.yaml`](render.yaml) Blueprint.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/bktechmission/myflipkart)
 
