@@ -201,3 +201,6 @@ textarea.inp{width:100%;min-height:200px;line-height:1.5}
 .tier{font-size:12px;border-radius:99px;padding:1px 8px;border:1px solid var(--line)}
 .tier.loyal{color:var(--good);border-color:var(--good)} .tier.watch{color:var(--warn);border-color:var(--warn)} .tier.blocked{color:var(--bad);border-color:var(--bad)}
 .box .iconbtn{width:36px;height:36px;align-self:flex-end}
+.next{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip.sm{font-size:13px;padding:4px 11px}
+.glance{max-width:520px;margin:0 auto}

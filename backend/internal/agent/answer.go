@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"asksauby/internal/llm"
 )
@@ -113,17 +114,7 @@ func templateAnswer(tool string, args map[string]any, res ToolResult, reply stri
 		}
 		return fmt.Sprintf("%s (sources: %s)", strings.Join(parts, " "), strings.Join(dedupe(srcs), ", "))
 	case tool == "get_order" && res.OK && res.Order != nil:
-		o := res.Order
-		var items []string
-		for _, c := range o.ItemCards {
-			items = append(items, fmt.Sprintf("%s (%s)", c.Name, c.ID))
-		}
-		when := ""
-		if o.DeliveredOn != "" {
-			when = ", delivered " + o.DeliveredOn
-		}
-		return fmt.Sprintf("Order %s is **%s** (placed %s%s). Items: %s. Total $%.2f.", o.ID,
-			strings.ReplaceAll(o.Status, "_", " "), o.PlacedOn, when, strings.Join(items, ", "), o.Total)
+		return orderStory(res.Order)
 	}
 	if res.Message != "" {
 		return res.Message
@@ -141,4 +132,106 @@ func dedupe(xs []string) []string {
 		}
 	}
 	return out
+}
+
+// orderStory describes an order the way a support person would.
+func orderStory(o *OrderView) string {
+	item := o.ID
+	if len(o.ItemCards) > 0 {
+		item = "your " + o.ItemCards[0].Name
+		if len(o.ItemCards) > 1 {
+			item += fmt.Sprintf(" (+%d more)", len(o.ItemCards)-1)
+		}
+	}
+	when := func(d string) string {
+		if t, err := time.Parse("2006-01-02", d); err == nil {
+			return t.Format("Mon, Jan 2")
+		}
+		return d
+	}
+	ref := fmt.Sprintf("order %s, $%.2f", o.ID, o.Total)
+	switch o.Status {
+	case "delivered":
+		return fmt.Sprintf("Good news: %s was delivered on %s (%s). How's it working out? I can help if anything's wrong with it.", item, when(o.DeliveredOn), ref)
+	case "shipped":
+		return fmt.Sprintf("%s is on its way 🚚 It shipped after you ordered on %s and should arrive in the next couple of days (%s).", upper(item), when(o.PlacedOn), ref)
+	case "placed":
+		return fmt.Sprintf("%s is confirmed and getting ready to ship (%s, placed %s). You can still cancel it until it ships.", upper(item), ref, when(o.PlacedOn))
+	case "on_hold":
+		return fmt.Sprintf("%s is waiting for a quick review by a teammate (%s). You won't be charged until it's approved.", upper(item), ref)
+	case "cancelled":
+		return fmt.Sprintf("That order was cancelled (%s). If it was paid, the refund went back to your original payment method.", ref)
+	case "return_pending_approval":
+		return fmt.Sprintf("Your return for %s is with a teammate for review (%s). They'll check the item's condition with you.", strings.TrimPrefix(item, "your "), ref)
+	case "return_requested":
+		msg := fmt.Sprintf("Your return for %s is in progress (RMA %s). Drop it off with the prepaid label from your email.", strings.TrimPrefix(item, "your "), o.RMA)
+		if o.RefundOnReceipt {
+			msg += fmt.Sprintf(" Your $%.2f refund is released as soon as it reaches our warehouse.", o.Total)
+		}
+		return msg
+	case "return_received":
+		return fmt.Sprintf("We've received your returned %s (%s). Ask me for the refund and I'll get it moving.", strings.TrimPrefix(item, "your "), ref)
+	case "refund_pending_approval":
+		return fmt.Sprintf("We've received %s back and the $%.2f refund is with a teammate for approval.", strings.TrimPrefix(item, "your "), o.Total)
+	case "refunded":
+		return fmt.Sprintf("Order %s is refunded: $%.2f went back to your original payment method (5-7 business days).", o.ID, o.Total)
+	case "replacement_requested":
+		return fmt.Sprintf("A free replacement for %s is on its way (order %s). Please send the original back with RMA %s.", strings.TrimPrefix(item, "your "), o.ReplacedBy, o.RMA)
+	}
+	return fmt.Sprintf("Order %s is %s (%s).", o.ID, strings.ReplaceAll(o.Status, "_", " "), ref)
+}
+
+func upper(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// FollowUps are the "what next?" chips under an answer: the actions a support
+// person would offer next, based on what just happened.
+func FollowUps(tool string, res ToolResult, guest bool) []Choice {
+	if guest {
+		return []Choice{{"Headphones under $100", "headphones under $100"}, {"How do returns work?", "how do returns work?"}}
+	}
+	if len(res.Choices) > 0 || res.NeedsConfirm || (res.Ticket != nil && res.Ticket.Kind == "live") {
+		return nil // Sauby asked a question, or a person is joining: don't crowd it
+	}
+	if o := res.Order; o != nil && (tool == "get_order" || res.Committed) {
+		id := o.ID
+		switch o.Status {
+		case "delivered":
+			return []Choice{{"Something's wrong with it", "my " + id + " arrived broken"}, {"Return it", "return " + id},
+				{"Get a replacement", "replace " + id}, {"It never arrived", "my order " + id + " never arrived"}}
+		case "shipped":
+			return []Choice{{"It's late", "my order " + id + " hasn't arrived yet"}, {"My other orders", "get my orders"}, {"Talk to a person", "talk to a person"}}
+		case "placed", "on_hold":
+			return []Choice{{"Cancel it", "cancel " + id}, {"My other orders", "get my orders"}}
+		case "return_requested", "return_pending_approval":
+			return []Choice{{"When is my refund?", "refund " + id}, {"My returns", "my returns"}}
+		case "return_received":
+			return []Choice{{"Refund it now", "refund " + id}}
+		}
+		return []Choice{{"My orders", "get my orders"}, {"Talk to a person", "talk to a person"}}
+	}
+	switch {
+	case len(res.Products) == 1:
+		p := res.Products[0]
+		out := []Choice{{"More like this", p.Category}}
+		if p.Stock > 0 {
+			out = append([]Choice{{fmt.Sprintf("Order it · $%.0f", p.Price), "order " + p.ID}}, out...)
+		}
+		return append(out, Choice{fmt.Sprintf("%s under $%.0f", upper(p.Category), p.Price), fmt.Sprintf("%s under $%.0f", p.Category, p.Price)})
+	case len(res.Products) > 1:
+		top := res.Products[0]
+		return []Choice{{"Tell me about the " + top.Name, "tell me about " + top.ID}, {"Order the " + top.Name, "order " + top.ID},
+			{fmt.Sprintf("Cheaper than $%.0f", top.Price), fmt.Sprintf("%s under $%.0f", top.Category, top.Price)}}
+	case tool == "list_orders" && len(res.Orders) > 0:
+		return []Choice{{"What hasn't arrived?", "what hasn't been delivered yet"}, {"Start a return", "start a return"}, {"My returns", "my returns"}}
+	case tool == "policy_search":
+		return []Choice{{"Start a return", "start a return"}, {"See my orders", "get my orders"}, {"Talk to a person", "talk to a person"}}
+	case tool == "chitchat":
+		return []Choice{{"Where's my latest order?", "where is my latest order?"}, {"Show my orders", "get my orders"}, {"Find headphones under $100", "headphones under $100"}}
+	}
+	return nil
 }

@@ -222,6 +222,7 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 	}
 
 	resp.Tool, resp.Args = route.Tool, route.Args
+	resp.Result.Suggest = FollowUps(route.Tool, resp.Result, strings.HasPrefix(cid, "G-"))
 	resp.OK = resp.Result.OK
 	a.mu.Lock() // remember which order we're talking about
 	if id := OrderRe.FindString(text); id != "" {

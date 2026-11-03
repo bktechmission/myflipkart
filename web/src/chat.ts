@@ -83,13 +83,35 @@ async function newChat(): Promise<void> {
   sid = (await api<{ sid: string }>("/api/sessions", { method: "POST" })).sid;
   cursor = 0;
   const guest = me.role === "guest";
+  const hour = new Date().getHours();
+  const hi = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   stream().innerHTML = `<div class="hello"><span class="mark" style="width:44px;height:44px;font-size:20px">S</span>
-    <h1 style="margin-top:14px">Hi ${esc(first(me.name))}, I'm Sauby</h1>
-    <p>${guest ? "Ask about products, prices and store policies. Sign in to manage orders." : "I can find products and help with your orders."}</p>
+    <h1 style="margin-top:14px">${hi}, ${esc(first(me.name))}! I'm Sauby.</h1>
+    <p>${guest ? "Ask me about products, prices and store policies. Sign in and I can help with your orders too." : "I'm here to help with your orders, returns and finding something new. What can I do for you?"}</p>
+    <div class="glance" id="glance"></div>
     <div class="suggest">${(guest
       ? ["Headphones under $100", "Laptop for video games", "How do returns work?"]
-      : ["Where is my latest order?", "Headphones for long flights", "I want a refund", "Talk to a person"])
+      : ["Where is my latest order?", "What hasn't arrived yet?", "Start a return", "Find headphones for flights", "Talk to a person"])
       .map((q) => `<button class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div></div>`;
+  if (!guest) glance();
+}
+
+/** Like a person who already looked you up: open with what's happening on your orders. */
+async function glance(): Promise<void> {
+  try {
+    const orders = await api<Order[]>("/api/orders");
+    const rank: Record<string, number> = { shipped: 0, placed: 1, on_hold: 1, return_pending_approval: 2, return_requested: 2, return_received: 2, replacement_requested: 2, delivered: 3 };
+    const pick = orders.filter((o) => o.status in rank).sort((a, b) => rank[a.status] - rank[b.status] || (b.id > a.id ? 1 : -1)).slice(0, 2);
+    const el = document.getElementById("glance");
+    if (!el || !pick.length) return;
+    const line = (o: Order) => ({ shipped: "is on its way", placed: "is getting ready to ship", on_hold: "is waiting for a quick review",
+      delivered: `arrived ${o.delivered_on || ""}`, return_requested: "return is in progress", return_pending_approval: "return is with a teammate",
+      return_received: "came back to us", replacement_requested: "replacement is on its way" } as any)[o.status] || statusLabel(o.status);
+    el.innerHTML = `<p class="muted" style="margin-top:18px">Here's what's happening with your orders:</p>` + pick.map((o) =>
+      `<div class="ocard"><img class="thumb" src="${esc(o.lines[0]?.image || "")}" alt=""><div style="flex:1;text-align:left"><b>${esc(o.lines[0]?.name || o.id)}</b> ${esc(line(o))}
+        <div class="muted">${o.id} · ${money(o.total)}</div></div>
+        <button class="btn ghost sm" data-q="I need help with order ${o.id}">Help with this</button></div>`).join("");
+  } catch { /* the greeting works without it */ }
 }
 
 async function loadSessions(): Promise<void> {
@@ -163,7 +185,7 @@ function renderAnswer(res: any, history = false): string {
       <div style="flex:1"><b>${esc(o.item_cards?.[0]?.name || o.id)}</b>${o.item_cards?.length > 1 ? ` <span class="muted">+${o.item_cards.length - 1} more</span>` : ""}
       <div class="muted">${o.id} · ${money(o.total)}</div>
       <div class="status ${o.status}">${icon(statusIcon[o.status] || "clock")}${esc(statusLabel(o.status))}</div></div>
-      ${r.choices?.length || history ? "" : `<button class="btn ghost sm" data-q="I need help with order ${o.id}">Get help</button>`}</div>`).join("");
+      ${r.choices?.length || history ? "" : `<button class="btn ghost sm" data-q="I need help with order ${o.id}">Help with this</button>`}</div>`).join("");
   }
   if (r.choices?.length && !history) {
     html += `<div class="actions">${r.choices.map((c: any) => `<button class="btn ghost sm" data-q="${esc(c.say)}">${esc(c.label)}</button>`).join("")}</div>`;
@@ -173,10 +195,14 @@ function renderAnswer(res: any, history = false): string {
       <img src="/img/${p.id}.svg" alt="" loading="lazy"><div class="b"><div class="n">${esc(p.name)}</div>
       <div class="p">${money(p.price)} <span class="muted">★ ${p.rating}</span></div></div></a>`).join("") + `</div>`;
   }
-  if (r.order && res.tool !== "get_order") {
+  if (r.order && !r.orders?.length) {
     const o = r.order;
-    html += `<div class="ocard"><img class="thumb" src="/img/${o.items?.[0]}.svg" alt=""><div style="flex:1"><b>${o.id}</b> · ${money(o.total)}
+    html += `<div class="ocard"><img class="thumb" src="/img/${o.items?.[0]}.svg" alt=""><div style="flex:1"><b>${esc(o.item_cards?.[0]?.name || o.id)}</b>
+      <div class="muted">${o.id} · ${money(o.total)}${o.delivered_on ? ` · delivered ${esc(o.delivered_on)}` : ` · placed ${esc(o.placed_on || "")}`}</div>
       <div class="status ${o.status}">${icon(statusIcon[o.status] || "clock")}${esc(statusLabel(o.status))}</div></div></div>`;
+  }
+  if (r.suggest?.length && !history) { // what a support person would offer next
+    html += `<div class="next">${r.suggest.map((c: any) => `<button class="chip sm" data-q="${esc(c.say)}">${esc(c.label)}</button>`).join("")}</div>`;
   }
   if (res.needs_confirm && !history) {
     html += `<div class="actions"><button class="btn sm" data-say="yes">Yes, go ahead</button><button class="btn ghost sm" data-say="no">No</button></div>`;

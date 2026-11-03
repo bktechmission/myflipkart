@@ -106,7 +106,8 @@ type ToolResult struct {
 	Ticket       *model.Ticket         `json:"ticket,omitempty"`
 	Approval     *model.Approval       `json:"approval,omitempty"`
 	Orders       []*OrderView          `json:"orders,omitempty"`  // list_orders, or candidates when asking "which order?"
-	Choices      []Choice              `json:"choices,omitempty"` // tappable follow-ups for the customer
+	Choices      []Choice              `json:"choices,omitempty"` // tappable answers to a question Sauby asked
+	Suggest      []Choice              `json:"suggest,omitempty"` // "what next?" chips under an answer
 	Retrieval    *search.RetrievalInfo `json:"retrieval,omitempty"`
 	NeedsConfirm bool                  `json:"needs_confirm,omitempty"`
 	Committed    bool                  `json:"committed,omitempty"` // the customer's action is done
