@@ -44,6 +44,7 @@ var (
 	refundRe   = regexp.MustCompile(`(?i)\b(refund|money back|reimburse)`)
 	returnRe   = regexp.MustCompile(`(?i)\b(return|send (it |this )?back)`)
 	policyRe   = regexp.MustCompile(`(?i)\b(polic(y|ies)|refunds?|warranty|warranties|shipping|delivery|deliver|return window|send (something|it|items?) back|returns?|returning|cancel\w*|money back|covered)\b`)
+	buyRe      = regexp.MustCompile(`(?i)\b(place (an? |my |the )?order|order (this|that|it|one)|buy|purchase|checkout|check out|add (it |this )?to (my )?cart)\b`)
 	chatRe     = regexp.MustCompile(`(?i)^\s*(hi|hello|hey|thanks|thank you|thx|bye|good (morning|evening)|ok|okay|yes|no)\b`)
 )
 
@@ -57,6 +58,10 @@ func (RuleRouter) Route(_ context.Context, text string, _ []llm.Message) Route {
 	switch {
 	case handoffRe.MatchString(text):
 		r.Tool, r.Args["summary"] = "handoff", text
+	case buyRe.MatchString(text) && !OrderRe.MatchString(text) && !questionRe.MatchString(text):
+		// support-only assistant: say so plainly instead of returning unrelated search results
+		r.Tool, r.Reply = "chitchat", "I can't place orders here: Sauby is the support assistant, and this demo store has no checkout. "+
+			"I can help you compare products, check prices, or track, cancel, return and refund the orders you already have."
 	case OrderRe.MatchString(text):
 		r.Args["order_id"] = strings.ToUpper(OrderRe.FindString(text))
 		switch {

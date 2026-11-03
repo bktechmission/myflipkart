@@ -128,6 +128,8 @@ func Golden(products []model.Product) []GoldenRow {
 		GoldenRow{Query: "tell me about P1003", Type: "product_id", Tool: "get_product", Args: map[string]any{"product_id": "P1003"}, ExpectOK: b(true)},
 		GoldenRow{Query: "details for product P1040", Type: "product_id", Tool: "get_product", Args: map[string]any{"product_id": "P1040"}, ExpectOK: b(true)},
 		GoldenRow{Query: "hi there!", Type: "chitchat", Tool: "chitchat"},
+		GoldenRow{Query: "place order this", Type: "chitchat", Tool: "chitchat"},
+		GoldenRow{Query: "I want to buy P1020", Type: "chitchat", Tool: "chitchat"},
 		GoldenRow{Query: "thanks, that's all", Type: "chitchat", Tool: "chitchat"},
 		// order history and multi-turn context
 		GoldenRow{Query: "get my orders", Type: "order", Tool: "list_orders", ExpectOK: b(true)},
