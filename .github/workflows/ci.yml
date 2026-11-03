@@ -21,6 +21,9 @@ jobs:
           test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
           go vet ./...
           go build ./...
+      - name: Unit, fault, agent and security tests (race detector on)
+        working-directory: backend
+        run: EMBED_BACKEND=hash go test -race -count=1 ./...
       - name: TypeScript (app + walkthrough)
         run: |
           cd web && npm ci && npx tsc -p . && npx tsc -p ../docs

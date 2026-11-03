@@ -45,6 +45,7 @@ type Hub struct {
 	Router    func() agent.Router // agent-assist: suggests tools to the (simulated) human
 	Sim       bool
 	JoinAfter time.Duration
+	Pace      float64 // scales simulated typing delays (tests use a tiny value); 0 = real time
 
 	mu     sync.Mutex
 	typing map[string]string         // sid -> name of agent currently typing
@@ -66,12 +67,12 @@ type State struct {
 
 func (h *Hub) StateFor(cid, sid string, after int) State {
 	st := State{Mode: "bot"}
-	if t, ok := h.S.OpenLiveTicket(sid); ok && t.CustomerID == cid {
+	if t, ok := h.S.OpenLiveTicket(cid, sid); ok {
 		st.TicketID, st.AgentName, st.AgentKind = t.ID, t.AgentName, t.AgentKind
 		st.Mode = map[string]string{"waiting": "waiting", "active": "human"}[t.Status]
 	}
 	h.mu.Lock()
-	st.Typing = h.typing[sid]
+	st.Typing = h.typing[cid+"/"+sid]
 	h.mu.Unlock()
 	msgs, _ := h.S.Messages(cid, sid)
 	st.Total = len(msgs)
@@ -88,8 +89,8 @@ func (h *Hub) StateFor(cid, sid string, after int) State {
 
 // HumanOwns reports whether a person (real or simulated) owns the conversation,
 // in which case Sauby must not answer.
-func (h *Hub) HumanOwns(sid string) (model.Ticket, bool) {
-	t, ok := h.S.OpenLiveTicket(sid)
+func (h *Hub) HumanOwns(cid, sid string) (model.Ticket, bool) {
+	t, ok := h.S.OpenLiveTicket(cid, sid)
 	return t, ok && (t.Status == "active" || t.Status == "waiting")
 }
 
@@ -218,11 +219,14 @@ func (h *Hub) typeFor(t model.Ticket, d time.Duration) {
 	if h.typing == nil {
 		h.typing = map[string]string{}
 	}
-	h.typing[t.SessionID] = first(t.AgentName)
+	h.typing[t.CustomerID+"/"+t.SessionID] = first(t.AgentName)
 	h.mu.Unlock()
+	if h.Pace > 0 {
+		d = time.Duration(float64(d) * h.Pace)
+	}
 	time.Sleep(d)
 	h.mu.Lock()
-	delete(h.typing, t.SessionID)
+	delete(h.typing, t.CustomerID+"/"+t.SessionID)
 	h.mu.Unlock()
 }
 
@@ -281,8 +285,8 @@ func (h *Hub) simGreet(t model.Ticket) {
 	case a.NoReturn: // missing item: check the courier, decide on standing
 		h.say(t, "agent", greet+fmt.Sprintf(" I'm sorry %s hasn't reached you. Let me check the tracking with the courier.", item), nil)
 		h.typeFor(t, 3000*time.Millisecond)
-		if c.Standing.Tier == "watch" || c.Standing.Tier == "blocked" {
-			h.say(t, "agent", "The courier shows it as delivered, so I've opened a formal claim with them. Our claims team will email you within 24 hours with the outcome.", nil)
+		if !canSettleClaim(c.Standing, a.Amount) { // bigger or repeat claims wait for the claims team (a real person)
+			h.say(t, "agent", "The courier shows it as delivered, so I've opened a formal claim with them. Our claims team will email you within 1-2 business days with the outcome, and you can reply to that email with any photos or details. If it can't be found, we'll send a replacement or a full refund.", nil)
 			return
 		}
 		d, err := h.Tools.DecideApproval(a.ID, agent.Decision{Approve: true, Condition: "not_received", Note: "courier could not confirm the drop-off"}, t.AgentName+" (simulated)")
@@ -290,12 +294,10 @@ func (h *Hub) simGreet(t model.Ticket) {
 			h.say(t, "agent", fmt.Sprintf("The courier couldn't confirm the drop-off, so I've approved a full refund of $%.2f. It reaches your original payment method in 5-7 business days. Anything else I can help with?", d.Amount), nil)
 		}
 		return
-	case a.Kind == "order" || a.Kind == "replacement":
-		h.say(t, "agent", greet+fmt.Sprintf(" I can see your %s %s is waiting for a review. Let me check it.", map[string]string{"order": "new order", "replacement": "replacement"}[a.Kind], a.OrderID), nil)
-		h.typeFor(t, 2500*time.Millisecond)
-		if _, err := h.Tools.DecideApproval(a.ID, agent.Decision{Approve: true, Note: "reviewed"}, t.AgentName+" (simulated)"); err == nil {
-			h.say(t, "agent", fmt.Sprintf("All good: I've approved it, and order %s will ship soon. Is there anything else I can help with?", a.OrderID), nil)
-		}
+	case a.Kind == "order" || a.Kind == "replacement": // held for fraud/value checks: only the orders team decides
+		h.say(t, "agent", greet+fmt.Sprintf(" I can see your %s %s is waiting for a review by our orders team. They check large and frequent orders, usually within a few hours, "+
+			"and you'll get an email as soon as it's approved. You won't be charged until then. Is there anything else I can help with?",
+			map[string]string{"order": "new order", "replacement": "replacement"}[a.Kind], a.OrderID), nil)
 		return
 	}
 	h.mu.Lock()
@@ -573,7 +575,7 @@ func (h *Hub) resolve(t model.Ticket, cs *caseState, text string) {
 		h.say(t, "agent", fmt.Sprintf("I'm so sorry. The courier shows your %s (order %s) as delivered on %s, but you didn't get it. I've opened case %s and I'm checking the delivery scan and GPS location with the courier now.",
 			item, o.ID, niceDate(o.DeliveredOn), k.ID), nil)
 		h.typeFor(t, 2500*time.Millisecond)
-		if (st.Tier == "loyal" || o.Total <= 50) && st.Tier != "watch" && st.Tier != "blocked" {
+		if canSettleClaim(st, o.Total) {
 			cs.ask = "replace_or_refund"
 			h.say(t, "agent", "Since you're a valued customer, I don't want you waiting on the courier. I can send a free replacement right away, or refund you in full. Would you like a replacement? (yes for a replacement, no for a refund)", nil)
 			return
@@ -624,7 +626,7 @@ func (h *Hub) replaceOrRefund(t model.Ticket, cs *caseState, o model.Order, text
 	if cs.topic == "not_arrived" { // nothing to send back: approve the claim this teammate opened
 		if wantReplace {
 			h.closeClaim(o.ID, false, by) // withdraw the refund claim, then send the replacement
-			r := h.Tools.Run("replace_order", map[string]any{"order_id": o.ID, "reason": "not received (" + cs.caseID + ")"}, t.CustomerID, t.SessionID, true)
+			r := h.Tools.Run("replace_order", map[string]any{"order_id": o.ID, "reason": "not received (" + cs.caseID + ")", "_no_return": true}, t.CustomerID, t.SessionID, true)
 			if r.Committed || r.Escalated {
 				nid := o.ID
 				if r.Order != nil {
@@ -747,3 +749,13 @@ func first(name string) string {
 }
 
 func agentSeller(category string) string { return seed.SellerFor(category) }
+
+// canSettleClaim: a teammate may settle a missing-item claim on the spot only for a
+// first claim, up to $150, from a loyal customer or for a small order. Everything
+// else goes to the claims team (a real person) with a courier investigation.
+func canSettleClaim(st agent.Standing, amount float64) bool {
+	if st.Tier == "watch" || st.Tier == "blocked" || st.Claims > 1 || amount > 150 {
+		return false
+	}
+	return st.Tier == "loyal" || amount <= 50
+}

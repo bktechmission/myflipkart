@@ -171,7 +171,7 @@ var Policies = []PolicyDoc{
 		"Once an order has shipped it can no longer be cancelled. Wait for delivery and start a return instead.",
 	}},
 	{ID: "shipping", Title: "Shipping", Version: 1, Paras: []string{
-		"Standard shipping is free on orders over $50 and arrives in 3-5 business days.",
+		"How long delivery takes: standard shipping arrives in 3-5 business days and is free on orders over $50.",
 		"Express shipping costs $15 and arrives in 1-2 business days. MyFlipKart.com ships to all 50 US states.",
 	}},
 	{ID: "refunds", Title: "Refunds", Version: 1, Paras: []string{

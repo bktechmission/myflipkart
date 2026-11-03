@@ -139,15 +139,17 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 	}
 	a.Store.AppendMessage(cid, sid, model.Message{TS: time.Now().UTC(), Role: "user", Content: text})
 	say("Sauby is reading your message…")
+	key := cid + "/" + sid // per-conversation state is scoped to its owner
+	a.prune()
 
 	var resp Response
 	var route Route
 	a.mu.Lock()
-	pend, hasPend := a.pending[sid]
+	pend, hasPend := a.pending[key]
 	if hasPend && time.Now().After(pend.Expires) {
 		hasPend = false
 	}
-	delete(a.pending, sid)
+	delete(a.pending, key)
 	a.mu.Unlock()
 
 	switch {
@@ -179,7 +181,7 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 			route.Tool == "replace_order" || route.Tool == "file_complaint" {
 			if id, _ := args["order_id"].(string); !OrderRe.MatchString(id) && id != "LATEST" {
 				a.mu.Lock()
-				f := a.focus[sid]
+				f := a.focus[key]
 				a.mu.Unlock()
 				if f != "" {
 					args["order_id"] = f
@@ -191,7 +193,7 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 		if route.Tool == "place_order" {
 			if id, _ := args["product_id"].(string); !ProductRe.MatchString(id) {
 				a.mu.Lock()
-				f, shown := a.focusP[sid], a.shown[sid]
+				f, shown := a.focusP[key], a.shown[key]
 				a.mu.Unlock()
 				if f != "" {
 					args["product_id"] = f
@@ -211,7 +213,7 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 		t2 := time.Now()
 		if resp.Result.NeedsConfirm {
 			a.mu.Lock()
-			a.pending[sid] = pendingAction{route.Tool, args, time.Now().Add(10 * time.Minute)}
+			a.pending[key] = pendingAction{route.Tool, args, time.Now().Add(10 * time.Minute)}
 			a.mu.Unlock()
 			resp.NeedsConfirm = true
 			resp.Answer, resp.Trace.AnswerMode = fmt.Sprintf("Just to confirm: I'll **%s**. Reply **yes** to go ahead or **no** to stop.", resp.Result.Message), "template"
@@ -226,23 +228,23 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 	resp.OK = resp.Result.OK
 	a.mu.Lock() // remember which order we're talking about
 	if id := OrderRe.FindString(text); id != "" {
-		a.focus[sid] = strings.ToUpper(id)
+		a.focus[key] = strings.ToUpper(id)
 	}
 	if resp.Result.Order != nil && resp.Result.OK {
-		a.focus[sid] = resp.Result.Order.ID
+		a.focus[key] = resp.Result.Order.ID
 	}
 	if ps := resp.Result.Products; len(ps) > 0 && route.Tool != "place_order" { // what "this" refers to next
-		a.shown[sid] = nil
+		a.shown[key] = nil
 		for _, p := range ps {
-			a.shown[sid] = append(a.shown[sid], p.ID)
+			a.shown[key] = append(a.shown[key], p.ID)
 		}
-		a.focusP[sid] = ""
+		a.focusP[key] = ""
 		if len(ps) == 1 {
-			a.focusP[sid] = ps[0].ID
+			a.focusP[key] = ps[0].ID
 		}
 	}
 	if id := ProductRe.FindString(text); id != "" {
-		a.focusP[sid] = strings.ToUpper(id)
+		a.focusP[key] = strings.ToUpper(id)
 	}
 	a.mu.Unlock()
 	resp.Trace.Router, resp.Trace.Provider, resp.Trace.Model = route.Router, route.Provider, route.Model
@@ -277,7 +279,7 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 		meta["result"] = m
 	}
 	a.Store.AppendMessage(cid, sid, model.Message{TS: time.Now().UTC(), Role: "assistant", Content: resp.Answer, Tool: resp.Tool, Meta: meta})
-	a.remember(sid, text, resp.Answer)
+	a.remember(key, text, resp.Answer)
 
 	n := len(resp.Result.Products) + len(resp.Result.Chunks)
 	if resp.Result.Order != nil {
@@ -330,9 +332,10 @@ var injRe = regexp.MustCompile(`(?i)(ignore (all |the )?(previous|above) instruc
 func InjectionSuspect(text string) bool { return injRe.MatchString(text) }
 
 func (a *Agent) historyFor(cid, sid string) []llm.Message {
+	key := cid + "/" + sid
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if h, ok := a.history[sid]; ok {
+	if h, ok := a.history[key]; ok {
 		return h
 	}
 	msgs, _ := a.Store.Messages(cid, sid) // resume a session after restart
@@ -345,14 +348,26 @@ func (a *Agent) historyFor(cid, sid string) []llm.Message {
 	if len(h) > 0 && h[len(h)-1].Role == "user" {
 		h = h[:len(h)-1] // the message we're handling right now
 	}
-	a.history[sid] = tail(h, 8)
-	return a.history[sid]
+	a.history[key] = tail(h, 8)
+	return a.history[key]
 }
 
-func (a *Agent) remember(sid, user, answer string) {
+// prune bounds per-conversation memory (pending confirms, focus, history) so a flood
+// of conversations can't grow it forever. Old entries are cheap to lose: history
+// reloads from the store, and a lost pending confirm just asks again.
+func (a *Agent) prune() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.history[sid] = tail(append(a.history[sid], llm.Message{Role: "user", Content: user},
+	if len(a.history)+len(a.pending)+len(a.focus)+len(a.focusP)+len(a.shown) < 20000 {
+		return
+	}
+	a.pending, a.focus, a.focusP, a.shown, a.history = map[string]pendingAction{}, map[string]string{}, map[string]string{}, map[string][]string{}, map[string][]llm.Message{}
+}
+
+func (a *Agent) remember(key, user, answer string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.history[key] = tail(append(a.history[key], llm.Message{Role: "user", Content: user},
 		llm.Message{Role: "assistant", Content: answer}), 8)
 }
 

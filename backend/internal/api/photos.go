@@ -21,20 +21,29 @@ import (
 
 	"asksauby/internal/auth"
 	"asksauby/internal/model"
-	"asksauby/internal/store"
 )
 
-const maxPhotoBytes = 4 << 20
+const (
+	maxPhotoBytes  = 4 << 20
+	maxPhotoPixels = 12_000_000 // ~4000x3000; decoding allocates width*height*8 bytes at worst
+)
+
+// photoSlots bounds concurrent image decodes so uploads can't exhaust memory.
+var photoSlots = make(chan struct{}, 2)
 
 func (s *Server) uploadPhoto(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	sid := r.PathValue("sid")
-	if !store.ValidSID(sid) || len(sess.CID) == 0 || sess.CID[0] == 'G' {
+	if !s.ownsSID(sess.CID, sid) || len(sess.CID) == 0 || sess.CID[0] == 'G' {
 		writeJSON(w, 400, map[string]string{"error": "sign in to share a photo"})
 		return
 	}
-	t, owned := s.Hub.HumanOwns(sid)
-	if !owned || t.CustomerID != sess.CID {
+	t, owned := s.Hub.HumanOwns(sess.CID, sid)
+	if !owned {
 		writeJSON(w, 409, map[string]string{"error": "photos can be shared while a teammate is in the chat"})
+		return
+	}
+	if ok, _ := s.chatLimit.Allow("photo:" + sess.CID); !ok {
+		writeJSON(w, 429, map[string]string{"error": "too many photos at once, please wait a moment"})
 		return
 	}
 	raw, err := io.ReadAll(r.Body)
@@ -43,8 +52,15 @@ func (s *Server) uploadPhoto(w http.ResponseWriter, r *http.Request, sess *auth.
 		return
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(raw))
-	if err != nil || (format != "jpeg" && format != "png") || cfg.Width < 16 || cfg.Height < 16 || cfg.Width > 6000 || cfg.Height > 6000 {
+	if err != nil || (format != "jpeg" && format != "png") || cfg.Width < 16 || cfg.Height < 16 || cfg.Width > 8000 || cfg.Height > 8000 || cfg.Width*cfg.Height > maxPhotoPixels {
 		writeJSON(w, 415, map[string]string{"error": "please share a JPEG or PNG photo"})
+		return
+	}
+	select {
+	case photoSlots <- struct{}{}:
+		defer func() { <-photoSlots }()
+	case <-time.After(5 * time.Second):
+		writeJSON(w, 503, map[string]string{"error": "busy, please try again"})
 		return
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))

@@ -183,7 +183,7 @@ func (t *Tools) returnGuard(tx *store.Txn, o model.Order) (why, guardrail, say s
 // toHuman holds the request for a teammate AND brings one into this chat right away.
 func (t *Tools) toHuman(tx *store.Txn, o model.Order, kind string, why, guardrail, say, reason, sid, prev string, noReturn bool, res *ToolResult) {
 	t.hold(tx, o, kind, o.Total, why, reason, sid, prev, noReturn)
-	lt, open := tx.OpenLiveTicket(sid)
+	lt, open := tx.OpenLiveTicket(o.CustomerID, sid)
 	if !open {
 		lt = model.Ticket{ID: fmt.Sprintf("T%d", time.Now().UnixNano()%1e8), Kind: "live", Topic: kind + "_review", CustomerID: o.CustomerID, SessionID: sid,
 			Summary: fmt.Sprintf("Review %s for %s ($%.2f): %s. Customer said: %s", kind, o.ID, o.Total, why, reason), Status: "waiting", CreatedAt: time.Now().UTC()}
@@ -287,7 +287,8 @@ func (t *Tools) Run(name string, args map[string]any, cid, sid string, commit bo
 			}
 			oid = mine[len(mine)-1].ID
 		}
-		return t.orderAction(name, oid, str("reason"), cid, sid, commit)
+		noReturn, _ := args["_no_return"].(bool) // set only by a teammate (live package); routed args never carry "_" keys
+		return t.orderAction(name, oid, str("reason"), cid, sid, commit, noReturn)
 	case "list_orders":
 		if strings.HasPrefix(cid, "G-") {
 			return ToolResult{Message: "Please sign in with your MyFlipKart.com account to see your orders.", Guardrail: "guest_blocked"}
@@ -311,7 +312,7 @@ func (t *Tools) Run(name string, args map[string]any, cid, sid string, commit bo
 		if strings.HasPrefix(cid, "G-") {
 			return ToolResult{Message: "Please sign in so a teammate can see your account and orders.", Guardrail: "guest_blocked"}
 		}
-		if open, ok := t.S.OpenLiveTicket(sid); ok { // idempotent: one live ticket per conversation
+		if open, ok := t.S.OpenLiveTicket(cid, sid); ok { // idempotent: one live ticket per conversation
 			return ToolResult{OK: true, Ticket: &open, Message: "A teammate is already on the way (ticket " + open.ID + ")."}
 		}
 		tk, err := t.openLive(cid, sid, str("summary"), "")
@@ -348,7 +349,7 @@ func (t *Tools) search(q string, lo, hi *float64) ToolResult {
 // Money rule: we never refund an item that wasn't returned. A refund is released
 // when the returned item reaches the warehouse (return_received), or after a
 // teammate confirms an item never arrived.
-func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) ToolResult {
+func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit, noReturn bool) ToolResult {
 	var res ToolResult
 	var stock map[string]int // product stock to mirror into the search index after commit
 	err := t.S.Tx(func(tx *store.Txn) error {
@@ -498,7 +499,7 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 			}
 			stock = t.takeStock(tx, n.Items)
 			o.Status, o.ReplacedBy, o.RMA = "replacement_requested", nid, rma(oid)
-			if strings.HasPrefix(reason, "not received") { // nothing to send back
+			if noReturn { // a teammate confirmed it never arrived: nothing to send back
 				o.RMA = ""
 			}
 			tx.PutOrder(n)
@@ -565,6 +566,11 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 				res.Committed = true
 				res.Message = fmt.Sprintf("All set: your $%.2f refund for %s is released as soon as the returned item reaches us.", o.Total, oid)
 			case "delivered":
+				if notReceivedRe.MatchString(reason) && age > t.ReturnWindow {
+					deny(fmt.Sprintf("Order %s was marked delivered %d days ago. Missing items need to be reported within %d days of delivery, but a teammate can still look into it.", oid, age, t.ReturnWindow))
+					res.Choices = []Choice{{"Talk to a person", "talk to a person"}}
+					return nil
+				}
 				if notReceivedRe.MatchString(reason) { // nothing to return: a person checks with the courier
 					t.toHuman(tx, o, "refund", "item reported not received: check with the courier", "not_received_claim",
 						fmt.Sprintf("I'm sorry order %s hasn't reached you. I've opened a missing-item claim.", oid), reason, sid, "delivered", true, &res)
@@ -943,7 +949,7 @@ func (t *Tools) OpenCase(cid, sid, oid, topic, summary string, claim bool) (mode
 
 // openLive queues the conversation for a human (idempotent per conversation).
 func (t *Tools) openLive(cid, sid, summary, topic string) (model.Ticket, error) {
-	if open, ok := t.S.OpenLiveTicket(sid); ok {
+	if open, ok := t.S.OpenLiveTicket(cid, sid); ok {
 		return open, nil
 	}
 	tk := model.Ticket{ID: fmt.Sprintf("T%d", time.Now().UnixNano()%1e8), Kind: "live", Topic: topic, CustomerID: cid, SessionID: sid,

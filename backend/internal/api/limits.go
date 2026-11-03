@@ -32,6 +32,16 @@ func (t *TokenBucket) Allow(key string) (bool, time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := time.Now()
+	if len(t.b) > 50000 { // drop idle buckets so a flood of keys can't grow memory forever
+		for k, v := range t.b {
+			if now.Sub(v.last) > 10*time.Minute {
+				delete(t.b, k)
+			}
+		}
+		if len(t.b) > 50000 {
+			t.b = map[string]*bucket{}
+		}
+	}
 	bk := t.b[key]
 	if bk == nil {
 		bk = &bucket{tokens: t.burst, last: now}
@@ -73,5 +83,8 @@ func (q *Quota) Add(cid string, tokens int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.roll()
+	if len(q.used) > 100000 {
+		q.used = map[string]int{} // bounded; resets daily anyway
+	}
 	q.used[cid] += tokens
 }

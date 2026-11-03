@@ -70,6 +70,17 @@ The demo runs on one machine with no infrastructure. Each component sits behind 
 | Safety | no cross-customer leaks, confirm before commit, returns over $29 handed to a person, condition + photo required to approve, grounded answers, exactly-once refunds under concurrency |
 | Ops | p50 / p95 / p99 per path against SLOs (FAQ p95 < 1 s, p99 < 5 s; orders and refunds p95 < 5 s, p99 < 30 s), time to first status, availability against 99.99%, handoff wait, tokens and cost |
 
+### Tests
+
+`make test` runs every Go test with the race detector (CI runs it on each push):
+
+| Suite | What it proves |
+|---|---|
+| `internal/agent` (unit + agent) | own-orders-only authZ, guest blocks, no refund without the item, $29 → person, 4th return in 30 days → person, condition + photo required to approve, exactly-once refunds under 30 concurrent requests, no overselling, replacement rules, customer standing, suspended sellers, missing-item claims, real customer phrasing → tools, multi-turn context and confirm/deny, LLM outage → rules fallback |
+| `internal/live` (agent) | demo teammates resolve every concern without looping: missing item → replacement/refund or a tracked case + email; faulty item → replacement or reviewed refund; used items declined; held orders and big claims left for real staff |
+| `internal/store` (fault) | restart durability, torn last write ignored, failed transaction changes nothing, 40 concurrent writers with unique order IDs, path-traversal-proof keys |
+| `internal/api` (security) | 401/403 on every protected route, tampered/expired cookies, CSRF header, cross-site sign-in blocked, conversations bound to their owner (no reading or posting into someone else's chat, live chat, feedback or photos), upload validation (type, size, pixel bombs, re-encoding), body limits, security headers, Secure cookies behind HTTPS, stored XSS, proxy-aware IP limits |
+
 ### Evals and release gates
 
 ```bash

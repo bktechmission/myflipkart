@@ -52,7 +52,8 @@ type Store struct {
 	feedback []model.Feedback
 	evFile   *os.File
 	convMu   sync.Mutex
-	mem      map[string][]byte // photos for memory-only stores (evals)
+	mem      map[string][]byte          // photos for memory-only stores (evals)
+	convs    map[string][]model.Message // conversations for memory-only stores
 }
 
 type rec struct {
@@ -273,14 +274,14 @@ func (t *Txn) RefundsSince(cid string, since time.Time) int {
 }
 
 // OpenLiveTicket finds the conversation's open live ticket inside the transaction.
-func (t *Txn) OpenLiveTicket(sid string) (model.Ticket, bool) {
+func (t *Txn) OpenLiveTicket(cid, sid string) (model.Ticket, bool) {
 	for i := len(t.recs) - 1; i >= 0; i-- {
-		if k := t.recs[i].Ticket; k != nil && k.SessionID == sid && k.Kind == "live" && k.Status != "closed" {
+		if k := t.recs[i].Ticket; k != nil && k.CustomerID == cid && k.SessionID == sid && k.Kind == "live" && k.Status != "closed" {
 			return *k, true
 		}
 	}
 	for _, k := range t.s.tickets {
-		if k.SessionID == sid && k.Kind == "live" && k.Status != "closed" {
+		if k.CustomerID == cid && k.SessionID == sid && k.Kind == "live" && k.Status != "closed" {
 			return k, true
 		}
 	}
@@ -596,11 +597,11 @@ func (s *Store) Ticket(id string) (model.Ticket, bool) {
 }
 
 // OpenLiveTicket returns the waiting/active live ticket for a session, if any.
-func (s *Store) OpenLiveTicket(sid string) (model.Ticket, bool) {
+func (s *Store) OpenLiveTicket(cid, sid string) (model.Ticket, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, t := range s.tickets {
-		if t.SessionID == sid && t.Kind == "live" && t.Status != "closed" {
+		if t.CustomerID == cid && t.SessionID == sid && t.Kind == "live" && t.Status != "closed" {
 			return t, true
 		}
 	}
@@ -691,12 +692,18 @@ func (s *Store) convPath(cid, sid string) (string, error) {
 
 // AppendMessage durably stores one message before the caller acknowledges it.
 func (s *Store) AppendMessage(cid, sid string, m model.Message) error {
-	if s.dir == "" {
-		return nil
-	}
 	p, err := s.convPath(cid, sid)
 	if err != nil {
 		return err
+	}
+	if s.dir == "" { // memory-only store (tests, evals)
+		s.convMu.Lock()
+		defer s.convMu.Unlock()
+		if s.convs == nil {
+			s.convs = map[string][]model.Message{}
+		}
+		s.convs[p] = append(s.convs[p], m)
+		return nil
 	}
 	s.convMu.Lock()
 	defer s.convMu.Unlock()
@@ -716,12 +723,14 @@ func (s *Store) AppendMessage(cid, sid string, m model.Message) error {
 }
 
 func (s *Store) Messages(cid, sid string) ([]model.Message, error) {
-	if s.dir == "" {
-		return nil, nil
-	}
 	p, err := s.convPath(cid, sid)
 	if err != nil {
 		return nil, err
+	}
+	if s.dir == "" {
+		s.convMu.Lock()
+		defer s.convMu.Unlock()
+		return append([]model.Message(nil), s.convs[p]...), nil
 	}
 	f, err := os.Open(p)
 	if err != nil {
@@ -777,6 +786,9 @@ func (s *Store) LogEvent(e model.Event) {
 	s.evMu.Lock()
 	defer s.evMu.Unlock()
 	s.events = append(s.events, e)
+	if len(s.events) > 200000 { // keep memory bounded; the file keeps everything
+		s.events = append([]model.Event(nil), s.events[len(s.events)-100000:]...)
+	}
 	if s.evFile != nil {
 		line, _ := json.Marshal(e)
 		s.evFile.Write(append(line, '\n'))
@@ -799,6 +811,9 @@ func (s *Store) AddFeedback(f model.Feedback) {
 	s.evMu.Lock()
 	defer s.evMu.Unlock()
 	s.feedback = append(s.feedback, f)
+	if len(s.feedback) > 100000 {
+		s.feedback = append([]model.Feedback(nil), s.feedback[len(s.feedback)-50000:]...)
+	}
 	if s.evFile != nil {
 		line, _ := json.Marshal(map[string]any{"feedback": f})
 		s.evFile.Write(append(line, '\n'))

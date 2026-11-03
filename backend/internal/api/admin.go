@@ -20,7 +20,6 @@ import (
 	"asksauby/internal/live"
 	"asksauby/internal/model"
 	"asksauby/internal/search"
-	"asksauby/internal/store"
 )
 
 // ---------------- human-agent approval queue ----------------
@@ -355,8 +354,8 @@ func (s *Server) liveClose(w http.ResponseWriter, r *http.Request, _ *auth.Sessi
 // liveState is polled by the customer's chat while a human (or simulated teammate) owns it.
 func (s *Server) liveState(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	after, _ := strconv.Atoi(r.URL.Query().Get("after"))
-	if !store.ValidSID(r.PathValue("sid")) {
-		writeJSON(w, 400, map[string]string{"error": "bad session"})
+	if !s.ownsSID(sess.CID, r.PathValue("sid")) {
+		writeJSON(w, 404, map[string]string{"error": "conversation not found"})
 		return
 	}
 	writeJSON(w, 200, s.Hub.StateFor(sess.CID, r.PathValue("sid"), after))

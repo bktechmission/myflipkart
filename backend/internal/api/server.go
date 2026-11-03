@@ -5,6 +5,10 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -14,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -166,7 +171,7 @@ func (s *Server) secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if v := recover(); v != nil {
-				log.Printf("panic: %v", v)
+				log.Printf("panic: %v\n%s", v, debug.Stack())
 				http.Error(w, "internal error", 500)
 			}
 		}()
@@ -185,6 +190,11 @@ func (s *Server) secure(next http.Handler) http.Handler {
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		// CSRF: state-changing API calls must carry a custom header, which a
 		// cross-site form or image tag cannot add (and SameSite=Lax cookies).
+		// Sign-in/out forms can't send custom headers: reject cross-site requests by Fetch Metadata.
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/auth/") && r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			http.Error(w, "cross-site request blocked", http.StatusForbidden)
+			return
+		}
 		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.HasPrefix(r.URL.Path, "/api/") && r.Header.Get("X-Sauby") != "1" {
 			writeJSON(w, 403, map[string]string{"error": "missing X-Sauby header"})
 			return
@@ -241,10 +251,16 @@ func (s *Server) provider(name string, r *http.Request) *auth.Provider {
 		return s.providers[name]
 	}
 	origin := s.base(r)
+	if len(origin) > 300 {
+		return nil
+	}
 	s.provMu.Lock()
 	defer s.provMu.Unlock()
 	if p := s.mockByURL[origin]; p != nil {
 		return p
+	}
+	if len(s.mockByURL) > 64 { // only a handful of real origins exist; don't cache junk Host headers forever
+		s.mockByURL = map[string]*auth.Provider{}
 	}
 	pub, _ := url.Parse(origin)
 	local := "127.0.0.1" + s.cfg.Addr
@@ -268,10 +284,27 @@ func (s *Server) setSession(w http.ResponseWriter, r *http.Request, sess auth.Se
 		Expires: time.Unix(sess.Exp, 0)})
 }
 
+// clientIP is the visitor's address. Behind a proxy we trust (TRUST_PROXY=1 on Render
+// or Cloudflare), RemoteAddr is the proxy, so use the address the proxy reports:
+// CF-Connecting-IP, or the right-most X-Forwarded-For entry (the one the proxy added;
+// entries to its left are client-supplied and can be forged).
 func clientIP(r *http.Request) string {
+	if trustProxy {
+		if ip := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); net.ParseIP(ip) != nil {
+			return ip
+		}
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if ip := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(ip) != nil {
+				return ip
+			}
+		}
+	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	return host
 }
+
+var trustProxy = os.Getenv("TRUST_PROXY") == "1"
 
 // ---------------- auth handlers ----------------
 
@@ -426,10 +459,14 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request, sess *auth.Ses
 }
 
 func (s *Server) newSession(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
-	writeJSON(w, 200, map[string]string{"sid": newSID()})
+	writeJSON(w, 200, map[string]string{"sid": s.newSID(sess.CID)})
 }
 
 func (s *Server) sessionMessages(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
+	if !s.ownsSID(sess.CID, r.PathValue("sid")) {
+		writeJSON(w, 404, map[string]string{"error": "conversation not found"})
+		return
+	}
 	msgs, err := s.store.Messages(sess.CID, r.PathValue("sid")) // scoped by cid: can't read others' chats
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "conversation not found"})
@@ -445,8 +482,12 @@ func (s *Server) feedback(w http.ResponseWriter, r *http.Request, sess *auth.Ses
 		Outcome string `json:"outcome"`
 		Comment string `json:"comment"`
 	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || !store.ValidSID(in.SID) || len(in.Comment) > 1000 {
+	if json.NewDecoder(r.Body).Decode(&in) != nil || !s.ownsSID(sess.CID, in.SID) || len(in.Comment) > 1000 || len(in.Outcome) > 40 {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
+		return
+	}
+	if ok, _ := s.chatLimit.Allow("fb:" + sess.ID); !ok {
+		writeJSON(w, 429, map[string]string{"error": "slow down"})
 		return
 	}
 	s.store.AddFeedback(model.Feedback{TS: time.Now().UTC(), CustomerID: sess.CID, SessionID: in.SID, Helpful: in.Helpful,
@@ -474,7 +515,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, sess *auth.Session
 		SID     string `json:"sid"`
 		Message string `json:"message"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || !store.ValidSID(in.SID) {
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || !s.ownsSID(sess.CID, in.SID) {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
 		return
 	}
@@ -484,19 +525,27 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, sess *auth.Session
 		return
 	}
 	// per browser session, so many visitors sharing a demo account don't throttle each other
-	if ok, wait := s.chatLimit.Allow("s:" + sess.ID); !ok {
+	limitKey := "s:" + sess.ID
+	if sess.Role == "guest" { // new guest sessions are free to create: limit guests by address too
+		limitKey = "ip:" + clientIP(r)
+	}
+	if ok, wait := s.chatLimit.Allow(limitKey); !ok {
 		s.store.LogEvent(model.Event{TS: time.Now().UTC(), CustomerID: sess.CID, SessionID: in.SID, Query: msg, Tool: "rate_limited",
 			Status: 429, Source: "chat", Flags: []string{"rate_limited"}})
 		w.Header().Set("Retry-After", fmt.Sprint(int(wait.Seconds())+1))
 		writeJSON(w, 429, map[string]string{"error": fmt.Sprintf("You're sending messages quickly — try again in %ds.", int(wait.Seconds())+1)})
 		return
 	}
-	if s.quota.Exceeded(sess.CID) {
+	quotaKey := sess.CID
+	if sess.Role == "guest" {
+		quotaKey = "ip:" + clientIP(r)
+	}
+	if s.quota.Exceeded(quotaKey) {
 		writeJSON(w, 429, map[string]string{"error": "Daily assistant limit reached. Please try again tomorrow."})
 		return
 	}
 	// A person owns this conversation: Sauby stays silent and the message goes to them.
-	if t, owned := s.Hub.HumanOwns(in.SID); owned && t.CustomerID == sess.CID {
+	if t, owned := s.Hub.HumanOwns(sess.CID, in.SID); owned {
 		s.store.AppendMessage(sess.CID, in.SID, model.Message{TS: time.Now().UTC(), Role: "user", Content: msg})
 		s.Hub.CustomerMessage(t, msg)
 		obs.Default.Inc("sauby_turns_total", "Chat turns by tool, path and agent version.", "tool", "live", "path", "handoff", "variant", "human")
@@ -521,7 +570,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, sess *auth.Session
 			send("status", map[string]string{"text": st})
 		}
 	})
-	s.quota.Add(sess.CID, resp.Trace.Tokens)
+	s.quota.Add(quotaKey, resp.Trace.Tokens)
 	send("answer", resp)
 }
 
@@ -543,11 +592,15 @@ func (s *Server) agentFor(sid string) *agent.Agent {
 
 func (s *Server) health() map[string]any {
 	prov := map[string]any{}
-	if s.gw.Internal != nil {
-		prov["internal"] = map[string]any{"model": s.gw.Internal.Model, "up": s.gw.Internal.Up()}
+	g := s.gw
+	if g == nil { // no LLM configured: rules-only mode
+		g = &llm.Gateway{}
 	}
-	if s.gw.External != nil {
-		prov["external"] = map[string]any{"model": s.gw.External.Model, "up": s.gw.External.Up()}
+	if g.Internal != nil {
+		prov["internal"] = map[string]any{"model": g.Internal.Model, "up": g.Internal.Up()}
+	}
+	if g.External != nil {
+		prov["external"] = map[string]any{"model": g.External.Model, "up": g.External.Up()}
 	}
 	h := map[string]any{"router": s.agent.RouterName(), "router_mode": s.cfg.Router, "llm": prov,
 		"embeddings": s.retriever.Stats()["embeddings"], "retriever": s.cfg.Retriever,
@@ -594,7 +647,28 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func newSID() string { return strings.ToLower(fmt.Sprintf("%x", []byte(auth.RandToken(12)))[:24]) }
+// newSID issues a conversation id bound to the customer: 16 random hex chars plus an
+// 8-char HMAC of (cid, random). Another customer can't use it, even if they learn it.
+func (s *Server) newSID(cid string) string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	r := hex.EncodeToString(b)
+	return r + s.sidMAC(cid, r)
+}
+
+func (s *Server) sidMAC(cid, r string) string {
+	m := hmac.New(sha256.New, []byte(s.cfg.SessionSecret))
+	m.Write([]byte("sid|" + cid + "|" + r))
+	return hex.EncodeToString(m.Sum(nil))[:8]
+}
+
+// ownsSID checks a conversation id was issued to this customer.
+func (s *Server) ownsSID(cid, sid string) bool {
+	if len(sid) != 24 || !store.ValidSID(sid) {
+		return false
+	}
+	return hmac.Equal([]byte(sid[16:]), []byte(s.sidMAC(cid, sid[:16])))
+}
 
 // ---------------- admin: evals ----------------
 

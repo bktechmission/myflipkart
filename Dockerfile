@@ -28,6 +28,7 @@ COPY backend/evals/gates.json /app/evals/gates.json
 # Disk is ephemeral on Cloudflare: the demo resets whenever the container sleeps.
 # The app listens on $PORT when the platform sets it (Render, Cloud Run), else :8080.
 ENV PUBLIC_URL=auto \
+    TRUST_PROXY=1 \
     PUBLIC_DEMO=1 \
     MOCK_EMBEDDED=1 \
     DATA_DIR=/tmp/sauby \

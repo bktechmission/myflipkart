@@ -8,7 +8,7 @@
 -include .env
 export
 
-.PHONY: setup web idp run dev eval eval-llm gate vet clean
+.PHONY: setup web idp run dev eval eval-llm gate test vet clean
 
 setup: .env
 .env:
@@ -37,6 +37,9 @@ eval-llm:
 
 gate:
 	cd backend && DATA_DIR=../data go run ./cmd/evals -gate -label ci
+
+test:
+	cd backend && EMBED_BACKEND=hash go test -race -count=1 ./...
 
 vet:
 	cd backend && gofmt -l . && go vet ./...
