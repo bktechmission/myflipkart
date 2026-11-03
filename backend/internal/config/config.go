@@ -87,7 +87,7 @@ func Load() Config {
 		}
 	}
 	c := Config{
-		Addr:               env("ADDR", ":8080"),
+		Addr:               env("ADDR", portAddr()), // ADDR, else :$PORT (Render, Cloud Run), else :8080
 		PublicURL:          strings.TrimRight(env("PUBLIC_URL", "http://localhost:8080"), "/"), // "auto" = from each request
 		DataDir:            env("DATA_DIR", "data"),
 		WebDir:             env("WEB_DIR", "../web/public"),
@@ -148,6 +148,14 @@ func Load() Config {
 		c.EphemeralSecret = true
 	}
 	return c
+}
+
+// portAddr honours the PORT variable that hosting platforms (Render, Cloud Run) set.
+func portAddr() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return ":" + p
+	}
+	return ":8080"
 }
 
 func env(k, d string) string {

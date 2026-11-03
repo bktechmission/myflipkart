@@ -1,0 +1,24 @@
+# Ask Sauby · MyFlipKart.com — Render Blueprint (free public demo)
+# Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+#
+# Render → New → Blueprint → pick this repo → Apply. Or use the button in the README.
+# Free web services sleep after ~15 idle minutes; the next visit wakes it (~30-60 s)
+# with fresh demo data (the disk is ephemeral, which keeps the demo clean).
+services:
+  - type: web
+    name: asksauby
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true      # random, created by Render; never in git
+      - key: SIM_AGENTS
+        value: "1"
+      - key: SIM_JOIN_AFTER_SEC
+        value: "6"
+      - key: ROUTER
+        value: rules             # free: no LLM calls. Add INTERNAL_LLM_* to enable one.

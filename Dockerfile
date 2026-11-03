@@ -26,8 +26,8 @@ COPY --from=web /src/web/public /app/web
 COPY backend/evals/gates.json /app/evals/gates.json
 # Public demo defaults. Secrets are generated in memory at start (nothing baked in).
 # Disk is ephemeral on Cloudflare: the demo resets whenever the container sleeps.
-ENV ADDR=:8080 \
-    PUBLIC_URL=auto \
+# The app listens on $PORT when the platform sets it (Render, Cloud Run), else :8080.
+ENV PUBLIC_URL=auto \
     PUBLIC_DEMO=1 \
     MOCK_EMBEDDED=1 \
     DATA_DIR=/tmp/sauby \
