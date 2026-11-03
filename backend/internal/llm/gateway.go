@@ -95,6 +95,14 @@ func (p *Provider) Probe() bool {
 	c := &http.Client{Timeout: 2 * time.Second}
 	resp, err := c.Do(req)
 	ok := false
+	if err == nil && p.Key != "" && resp.StatusCode != 401 && resp.StatusCode != 403 && resp.StatusCode < 500 {
+		// Hosted APIs (e.g. Workers AI) may not list models; a valid key is enough.
+		resp.Body.Close()
+		p.mu.Lock()
+		p.up = true
+		p.mu.Unlock()
+		return true
+	}
 	if err == nil {
 		defer resp.Body.Close()
 		var out struct {

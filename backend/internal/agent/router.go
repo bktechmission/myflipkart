@@ -123,6 +123,12 @@ func (l LLMRouter) Route(ctx context.Context, text string, history []llm.Message
 	}
 	r := Route{Router: "llm", Provider: res.Provider, Model: res.Model, Tokens: res.Tokens, Failover: res.Failover, Complex: cx}
 	if len(res.Message.ToolCalls) == 0 {
+		// Some hosted models answer in prose instead of calling a tool. If the rules see a
+		// clear task (order id, price range, policy...), trust them over small talk.
+		if rr := (RuleRouter{}).Route(ctx, text, nil); rr.Tool != "chitchat" && rr.Tool != "search_products" {
+			rr.Router, rr.Provider, rr.Model, rr.Tokens, rr.Complex = "llm+rules", res.Provider, res.Model, res.Tokens, cx
+			return rr
+		}
 		r.Tool, r.Args, r.Reply = "chitchat", map[string]any{}, res.Message.Content
 		return r
 	}

@@ -67,6 +67,7 @@ func SignRS256(key *rsa.PrivateKey, kid string, claims map[string]any) (string, 
 // JWKS caches a provider's signing keys and refreshes on unknown kid (key rotation).
 type JWKS struct {
 	URL     string
+	Via     func(*http.Request) // optional: reroute server-side calls (embedded IdP over loopback)
 	mu      sync.Mutex
 	keys    map[string]*rsa.PublicKey
 	fetched time.Time
@@ -84,7 +85,11 @@ func (j *JWKS) key(kid string) (*rsa.PublicKey, error) {
 		}
 		return nil, fmt.Errorf("unknown signing key %q", kid)
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(j.URL)
+	req, _ := http.NewRequest("GET", j.URL, nil)
+	if j.Via != nil {
+		j.Via(req)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch jwks: %w", err)
 	}

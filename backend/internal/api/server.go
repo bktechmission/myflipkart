@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"asksauby/internal/evals"
 	"asksauby/internal/live"
 	"asksauby/internal/llm"
+	"asksauby/internal/mockid"
 	"asksauby/internal/model"
 	"asksauby/internal/obs"
 	"asksauby/internal/search"
@@ -42,6 +44,9 @@ type Server struct {
 	Hub       *live.Hub // human handoff: queue, agent console, simulated teammates
 	signer    auth.Signer
 	providers map[string]*auth.Provider
+	provMu    sync.Mutex
+	mockByURL map[string]*auth.Provider // embedded MockID: one provider per public origin
+	idp       *mockid.IdP
 	chatLimit *TokenBucket
 	authLimit *TokenBucket
 	quota     *Quota
@@ -73,6 +78,11 @@ func New(cfg config.Config, st *store.Store, r *search.Retriever, gw, canaryGW *
 	if cfg.MockClientSecret == "" {
 		log.Println("MockID login disabled: MOCK_IDP_CLIENT_SECRET not set (run `make setup`)")
 	}
+	s.mockByURL = map[string]*auth.Provider{}
+	if cfg.MockEmbedded { // public demo: the IdP lives inside this process at /mockid
+		s.idp, _ = mockid.New(mockid.Config{Base: "/mockid", ClientID: cfg.MockClientID, ClientSecret: cfg.MockClientSecret,
+			Password: os.Getenv("MOCK_IDP_PASSWORD"), AllowOther: !cfg.PublicDemo}, "")
+	}
 	s.providers["mock"] = &auth.Provider{Name: "mock", Label: "MockID (local dev)", Issuer: cfg.MockIssuer,
 		ClientID: cfg.MockClientID, ClientSecret: cfg.MockClientSecret}
 	return s
@@ -80,6 +90,9 @@ func New(cfg config.Config, st *store.Store, r *search.Retriever, gw, canaryGW *
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
+	if s.idp != nil {
+		m.Handle("/mockid/", s.idp.Handler())
+	}
 	web := s.cfg.WebDir
 	page := func(name string, needLogin, needAdmin bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +172,7 @@ func (s *Server) secure(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'")
-		if strings.HasPrefix(s.cfg.PublicURL, "https://") {
+		if s.isHTTPS(r) {
 			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
@@ -204,9 +217,47 @@ func (s *Server) withAuth(h func(http.ResponseWriter, *http.Request, *auth.Sessi
 	}
 }
 
-func (s *Server) setSession(w http.ResponseWriter, sess auth.Session) {
+// base is the public origin the browser uses: PUBLIC_URL, or (PUBLIC_URL=auto) the
+// request's own Host, so one image runs on any domain (workers.dev, custom domain).
+func (s *Server) base(r *http.Request) string {
+	if s.cfg.PublicURL == "auto" {
+		return mockid.Origin(r)
+	}
+	return s.cfg.PublicURL
+}
+
+func (s *Server) isHTTPS(r *http.Request) bool { return strings.HasPrefix(s.base(r), "https://") }
+
+// provider returns the sign-in provider; the embedded MockID gets one per origin.
+func (s *Server) provider(name string, r *http.Request) *auth.Provider {
+	if name != "mock" || s.idp == nil {
+		return s.providers[name]
+	}
+	origin := s.base(r)
+	s.provMu.Lock()
+	defer s.provMu.Unlock()
+	if p := s.mockByURL[origin]; p != nil {
+		return p
+	}
+	pub, _ := url.Parse(origin)
+	local := "127.0.0.1" + s.cfg.Addr
+	if strings.HasPrefix(s.cfg.Addr, "127.") || strings.HasPrefix(s.cfg.Addr, "localhost") {
+		local = s.cfg.Addr
+	}
+	p := &auth.Provider{Name: "mock", Label: "Demo accounts", Issuer: origin + "/mockid",
+		ClientID: s.cfg.MockClientID, ClientSecret: s.cfg.MockClientSecret,
+		Via: func(req *http.Request) { // call ourselves over loopback, keep the public identity
+			req.URL.Scheme, req.URL.Host = "http", local
+			req.Host = pub.Host
+			req.Header.Set("X-Forwarded-Proto", pub.Scheme)
+		}}
+	s.mockByURL[origin] = p
+	return p
+}
+
+func (s *Server) setSession(w http.ResponseWriter, r *http.Request, sess auth.Session) {
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: s.signer.Sign(sess), Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.cfg.PublicURL, "https://"),
+		SameSite: http.SameSiteLaxMode, Secure: s.isHTTPS(r),
 		Expires: time.Unix(sess.Exp, 0)})
 }
 
@@ -217,12 +268,12 @@ func clientIP(r *http.Request) string {
 
 // ---------------- auth handlers ----------------
 
-func (s *Server) redirectURL() string { return s.cfg.PublicURL + "/auth/callback" }
+func (s *Server) redirectURL(r *http.Request) string { return s.base(r) + "/auth/callback" }
 
 func (s *Server) authProviders(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for _, name := range []string{"google", "mock"} {
-		if p, ok := s.providers[name]; ok && (name != "mock" || s.cfg.MockClientSecret != "") {
+		if p := s.provider(name, r); p != nil && (name != "mock" || s.cfg.MockClientSecret != "") {
 			out = append(out, map[string]any{"name": name, "label": p.Label})
 		}
 	}
@@ -234,21 +285,22 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many login attempts", 429)
 		return
 	}
-	p, ok := s.providers[r.URL.Query().Get("provider")]
+	p := s.provider(r.URL.Query().Get("provider"), r)
+	ok := p != nil
 	if !ok {
 		http.Redirect(w, r, "/login?error="+url.QueryEscape("Unknown or unconfigured sign-in provider"), http.StatusFound)
 		return
 	}
 	st := auth.LoginState{Provider: p.Name, State: auth.RandToken(16), Nonce: auth.RandToken(16),
 		Verifier: auth.RandToken(32), Exp: time.Now().Add(10 * time.Minute).Unix()}
-	u, err := p.AuthCodeURL(st, s.redirectURL())
+	u, err := p.AuthCodeURL(st, s.redirectURL(r))
 	if err != nil {
 		log.Printf("login %s: %v", p.Name, err)
 		http.Redirect(w, r, "/login?error="+url.QueryEscape(p.Label+" is unreachable. Is it running?"), http.StatusFound)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: stateCookie, Value: s.signer.Sign(st), Path: "/auth", HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.cfg.PublicURL, "https://"), MaxAge: 600})
+		SameSite: http.SameSiteLaxMode, Secure: s.isHTTPS(r), MaxAge: 600})
 	http.Redirect(w, r, u, http.StatusFound)
 }
 
@@ -273,12 +325,12 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		fail("Sign-in state mismatch.")
 		return
 	}
-	p := s.providers[st.Provider]
+	p := s.provider(st.Provider, r)
 	if p == nil {
 		fail("Unknown provider.")
 		return
 	}
-	claims, err := p.Exchange(q.Get("code"), st.Verifier, s.redirectURL(), st.Nonce)
+	claims, err := p.Exchange(q.Get("code"), st.Verifier, s.redirectURL(r), st.Nonce)
 	if err != nil {
 		fail("Could not verify your identity: " + err.Error())
 		return
@@ -292,7 +344,7 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.AdminEmails[u.Email] {
 		role = "admin"
 	}
-	s.setSession(w, auth.Session{CID: u.CustomerID, Email: u.Email, Name: u.Name, Picture: u.Picture, Role: role,
+	s.setSession(w, r, auth.Session{CID: u.CustomerID, Email: u.Email, Name: u.Name, Picture: u.Picture, Role: role,
 		Provider: p.Name, Exp: time.Now().Add(12 * time.Hour).Unix(), ID: auth.RandToken(12)})
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -303,7 +355,7 @@ func (s *Server) authGuest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := auth.RandToken(9)
-	s.setSession(w, auth.Session{CID: "G-" + strings.NewReplacer("-", "x", "_", "y").Replace(id), Name: "Guest", Role: "guest",
+	s.setSession(w, r, auth.Session{CID: "G-" + strings.NewReplacer("-", "x", "_", "y").Replace(id), Name: "Guest", Role: "guest",
 		Provider: "guest", Exp: time.Now().Add(2 * time.Hour).Unix(), ID: id})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
@@ -411,7 +463,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, sess *auth.Session
 		writeJSON(w, 400, map[string]string{"error": "message must be 1-2000 characters"})
 		return
 	}
-	if ok, wait := s.chatLimit.Allow("u:" + sess.CID); !ok {
+	// per browser session, so many visitors sharing a demo account don't throttle each other
+	if ok, wait := s.chatLimit.Allow("s:" + sess.ID); !ok {
 		s.store.LogEvent(model.Event{TS: time.Now().UTC(), CustomerID: sess.CID, SessionID: in.SID, Query: msg, Tool: "rate_limited",
 			Status: 429, Source: "chat", Flags: []string{"rate_limited"}})
 		w.Header().Set("Retry-After", fmt.Sprint(int(wait.Seconds())+1))

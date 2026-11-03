@@ -22,6 +22,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if cfg.MockEmbedded {
+		log.Println("MockID embedded at /mockid (public demo sign-in)")
+	}
 	if cfg.EphemeralSecret {
 		log.Println("SESSION_SECRET not set: using a random one for this run (sign-ins reset on restart). Run `make setup`.")
 	}
@@ -40,7 +43,7 @@ func main() {
 		if model == "" {
 			model = cfg.InternalLLMModel
 		}
-		canaryGW = &llm.Gateway{Internal: llm.NewProvider("internal-canary", cfg.InternalLLMURL, model, "", 60*time.Second), External: gw.External}
+		canaryGW = &llm.Gateway{Internal: llm.NewProvider("internal-canary", cfg.InternalLLMURL, model, cfg.InternalLLMKey, 60*time.Second), External: gw.External}
 		canaryGW.Internal.Probe()
 	}
 	app := api.New(cfg, st, r, gw, canaryGW)
@@ -64,8 +67,12 @@ func main() {
 		}
 	}()
 	go func() {
-		log.Printf("Ask Sauby on %s  embeddings=%s  router=%s  google_login=%v  mock_idp=%s",
-			cfg.PublicURL, r.EmbedLabel, cfg.Router, cfg.GoogleClientID != "", cfg.MockIssuer)
+		idp := cfg.MockIssuer
+		if cfg.MockEmbedded {
+			idp = "embedded at /mockid"
+		}
+		log.Printf("Ask Sauby on %s (listening %s)  embeddings=%s  router=%s  google_login=%v  mock_idp=%s",
+			cfg.PublicURL, cfg.Addr, r.EmbedLabel, cfg.Router, cfg.GoogleClientID != "", idp)
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -77,7 +84,7 @@ func main() {
 }
 
 func NewGateway(cfg config.Config) *llm.Gateway {
-	gw := &llm.Gateway{Internal: llm.NewProvider("internal", cfg.InternalLLMURL, cfg.InternalLLMModel, "", 60*time.Second)}
+	gw := &llm.Gateway{Internal: llm.NewProvider("internal", cfg.InternalLLMURL, cfg.InternalLLMModel, cfg.InternalLLMKey, 60*time.Second)}
 	if cfg.ExternalLLMURL != "" && cfg.ExternalLLMModel != "" {
 		gw.External = llm.NewProvider("external", cfg.ExternalLLMURL, cfg.ExternalLLMModel, cfg.ExternalLLMKey, 30*time.Second)
 	}

@@ -70,6 +70,8 @@ type Config struct {
 
 	// Demo / hosting
 	PublicDemo      bool    // hosted for anyone: passwordless MockID, eval cooldown
+	MockEmbedded    bool    // serve MockID inside the app at /mockid (one container, one URL)
+	InternalLLMKey  string  // API key for the internal provider (e.g. Workers AI token)
 	SimAgents       bool    // simulated support teammates join if no human picks up
 	SimJoinAfterSec float64 // seconds a handoff waits for a real human first
 	Rerank          bool    // second-stage reranker after RRF fusion
@@ -86,7 +88,7 @@ func Load() Config {
 	}
 	c := Config{
 		Addr:               env("ADDR", ":8080"),
-		PublicURL:          strings.TrimRight(env("PUBLIC_URL", "http://localhost:8080"), "/"),
+		PublicURL:          strings.TrimRight(env("PUBLIC_URL", "http://localhost:8080"), "/"), // "auto" = from each request
 		DataDir:            env("DATA_DIR", "data"),
 		WebDir:             env("WEB_DIR", "../web/public"),
 		SessionSecret:      os.Getenv("SESSION_SECRET"), // empty -> random per process (see Load)
@@ -124,10 +126,18 @@ func Load() Config {
 		CanaryRouter:       env("CANARY_ROUTER", env("ROUTER", "auto")),
 		EvalGates:          env("EVAL_GATES", "evals/gates.json"),
 		PublicDemo:         os.Getenv("PUBLIC_DEMO") == "1",
+		MockEmbedded:       os.Getenv("MOCK_EMBEDDED") == "1",
+		InternalLLMKey:     os.Getenv("INTERNAL_LLM_API_KEY"),
 		SimAgents:          env("SIM_AGENTS", "1") == "1",
 		SimJoinAfterSec:    envF("SIM_JOIN_AFTER_SEC", 6),
 		Rerank:             env("RERANK", "1") == "1",
 		MetricsToken:       os.Getenv("METRICS_TOKEN"),
+	}
+	if c.MockEmbedded && len(c.MockClientSecret) < 16 {
+		// Embedded IdP and app share one process: an in-memory random secret is enough.
+		b := make([]byte, 24)
+		rand.Read(b)
+		c.MockClientSecret = hex.EncodeToString(b)
 	}
 	if len(c.SessionSecret) < 32 {
 		// No secret configured: generate one for this process. Sessions reset on restart,

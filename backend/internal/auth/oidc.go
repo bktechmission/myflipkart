@@ -22,6 +22,10 @@ type Provider struct {
 	ExtraIssuers []string // Google also uses "accounts.google.com"
 	ClientID     string
 	ClientSecret string
+	// Via, if set, rewrites every server-side request (discovery, token, JWKS). The
+	// embedded demo IdP uses it to call itself over loopback while keeping the public
+	// Host header, so issuer and endpoints still say the public URL.
+	Via func(*http.Request)
 
 	mu         sync.Mutex
 	authURL    string
@@ -36,7 +40,11 @@ func (p *Provider) discover() error {
 	if p.authURL != "" {
 		return nil
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(p.Issuer + "/.well-known/openid-configuration")
+	req, _ := http.NewRequest("GET", p.Issuer+"/.well-known/openid-configuration", nil)
+	if p.Via != nil {
+		p.Via(req)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil { // not cached: the IdP may simply have started after us
 		return fmt.Errorf("%s discovery: %w", p.Name, err)
 	}
@@ -50,7 +58,7 @@ func (p *Provider) discover() error {
 	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil || d.AuthorizationEndpoint == "" {
 		return fmt.Errorf("%s discovery: bad document", p.Name)
 	}
-	p.issuerSeen, p.authURL, p.tokenURL, p.jwks = d.Issuer, d.AuthorizationEndpoint, d.TokenEndpoint, &JWKS{URL: d.JWKSURI}
+	p.issuerSeen, p.authURL, p.tokenURL, p.jwks = d.Issuer, d.AuthorizationEndpoint, d.TokenEndpoint, &JWKS{URL: d.JWKSURI, Via: p.Via}
 	return nil
 }
 
@@ -92,7 +100,12 @@ func (p *Provider) Exchange(code, verifier, redirect, nonce string) (*IDClaims, 
 	}
 	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect},
 		"client_id": {p.ClientID}, "client_secret": {p.ClientSecret}, "code_verifier": {verifier}}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).PostForm(p.tokenURL, form)
+	req, _ := http.NewRequest("POST", p.tokenURL, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if p.Via != nil {
+		p.Via(req)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token endpoint: %w", err)
 	}

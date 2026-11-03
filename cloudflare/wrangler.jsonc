@@ -1,0 +1,25 @@
+// Ask Sauby · MyFlipKart.com — Cloudflare Worker + Container
+// Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+//
+// The Worker receives every request at the edge and forwards it to ONE container
+// instance (the demo keeps its state in memory and on the container's ephemeral disk).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "asksauby",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "Sauby",
+      "image": "../Dockerfile",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "class_name": "Sauby", "name": "SAUBY" }]
+  },
+  "exports": {
+    "Sauby": { "type": "durable-object", "storage": "sqlite" }
+  }
+}

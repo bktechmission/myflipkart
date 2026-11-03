@@ -34,7 +34,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	gw := &llm.Gateway{Internal: llm.NewProvider("internal", cfg.InternalLLMURL, cfg.InternalLLMModel, "", 60*time.Second)}
+	gw := &llm.Gateway{Internal: llm.NewProvider("internal", cfg.InternalLLMURL, cfg.InternalLLMModel, cfg.InternalLLMKey, 60*time.Second)}
 	if cfg.ExternalLLMURL != "" {
 		gw.External = llm.NewProvider("external", cfg.ExternalLLMURL, cfg.ExternalLLMModel, cfg.ExternalLLMKey, 30*time.Second)
 		gw.External.Probe()

@@ -147,24 +147,58 @@ MockID, the local demo provider in `backend/cmd/mockidp`, speaks the same OpenID
 
 ## Host it for others on Cloudflare
 
-Yes, this can run on Cloudflare:
+The public demo runs as **one Cloudflare Worker in front of one Container**:
 
-| Part | Cloudflare product |
-|---|---|
-| Walkthrough page (`docs/`) | **Pages**, or GitHub Pages as linked above |
-| Go server | **Containers** (generally available since April 2026): build `backend/` into an image and route a Worker to it |
-| LLM | **Workers AI** has an OpenAI-compatible endpoint, so point `EXTERNAL_LLM_URL` / `INTERNAL_LLM_URL` at it with an API token (as a secret) |
-| Abuse protection | WAF and rate-limiting rules at the edge, plus **Turnstile** on the sign-in page |
+```
+browser → Cloudflare edge (TLS, WAF, rate limits) → Worker (cloudflare/src/index.ts) → Container: Go server :8080
+```
 
-For a public playground:
+- **One image** ([`Dockerfile`](Dockerfile)): the Go server, the compiled UI, and the demo sign-in. The sign-in is embedded at `/mockid` (`MOCK_EMBEDDED=1`), so the whole app lives on one URL.
+- **No secrets to manage.** Session and sign-in secrets are generated in memory at start. Nothing is baked into the image.
+- **Self-resetting.** Container disk is ephemeral. After 30 idle minutes the container sleeps, and the next visitor gets fresh demo data.
+- **Public-demo guards** (`PUBLIC_DEMO=1`):
+  - demo accounts only;
+  - rate limits per browser session;
+  - one eval run per minute;
+  - a daily LLM-token cap per account.
 
-- Set `PUBLIC_DEMO=1`. MockID becomes passwordless and eval runs are limited to one per minute.
-- Leave `MOCK_IDP_PASSWORD` empty.
-- Keep `AUTO_REFUND_LIMIT` low.
-- Reset demo data on a schedule.
-- Never reuse the demo's secrets elsewhere.
+**Requirements:** a Cloudflare account on the **Workers Paid** plan (Containers need it), and nothing to install on your Mac. GitHub Actions builds and deploys the image.
 
-The embedded store keeps data on the container's disk, which may be reset. That's fine for a demo. For anything real, use Postgres (e.g. via Hyperdrive) and a managed NoSQL store.
+### Deploy with GitHub Actions (recommended)
+
+1. **Cloudflare dashboard → My Profile → API Tokens → Create Token.** Start from the *Edit Cloudflare Workers* template for your account. If the first deploy reports a missing container permission, edit the token and add the Containers permission. Copy the token and your **Account ID** (shown on the Workers overview page).
+2. **GitHub → repo Settings → Secrets and variables → Actions:**
+   - Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
+   - Variable: `DEPLOY_CLOUDFLARE` = `true`
+3. **Actions → deploy-cloudflare → Run workflow.** The first deploy takes a few minutes while the image builds and rolls out. The app is then live at `https://asksauby.<your-subdomain>.workers.dev`. Later pushes to `main` that touch the app redeploy it automatically.
+
+### Turn on the LLM (optional)
+
+Without an LLM, the demo uses the rule router: free and deterministic. To show real tool calling with **Workers AI** (OpenAI-compatible, so the existing gateway works unchanged):
+
+1. Create a second API token with **Workers AI: Read**.
+2. Add it as the GitHub secret `WORKERS_AI_TOKEN` and re-run the workflow.
+
+The default model is `@cf/meta/llama-3.3-70b-instruct-fp8-fast`. Override it with the Worker secret `WORKERS_AI_MODEL`. If a model replies in prose instead of calling a tool, Sauby falls back to the rule router for clear tasks. Run the evals against the model you pick before sharing widely.
+
+### Deploy from your Mac instead
+
+Needs Docker Desktop running:
+
+```bash
+cd cloudflare && npm install
+npx wrangler login
+npx wrangler deploy
+npx wrangler secret put WORKERS_AI_TOKEN   # optional, plus CF_ACCOUNT_ID
+```
+
+### Keep a public demo healthy
+
+- Add a **WAF rate-limiting rule** (e.g. 60 requests per minute per IP on `/api/chat`).
+- Add **Turnstile** on `/login` if you see bots.
+- Watch **Workers → asksauby → Observability**.
+- Admin is open to anyone who signs in as the demo admin, which is intentional for learning. Edits vanish when the container sleeps.
+- Google sign-in is off in the public demo unless you add `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` and register `https://<your-host>/auth/callback` with Google.
 
 ## Security notes
 
@@ -182,6 +216,7 @@ The embedded store keeps data on the container's disk, which may be reset. That'
 backend/                Go, standard library only
   cmd/server            the app
   cmd/mockidp           local OpenID Connect provider (demo accounts)
+  internal/mockid       the demo IdP itself (standalone, or embedded at /mockid)
   cmd/evals             eval runner + release gates
   internal/agent        orchestrator, routers, tools, guardrails, answers
   internal/llm          LLM gateway (internal/external, breakers, failover)
@@ -194,6 +229,8 @@ backend/                Go, standard library only
   internal/evals        retrieval / router / e2e suites, gates
 web/                    TypeScript UI (chat, orders, shop, admin), light + black themes
 docs/                   GitHub Pages walkthrough + Excalidraw architecture
+cloudflare/             Worker + Container config for the public demo
+Dockerfile              one image: server + UI + embedded demo sign-in
 ```
 
 ---

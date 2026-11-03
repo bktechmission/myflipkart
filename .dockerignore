@@ -1,0 +1,7 @@
+.git
+.env
+data
+**/node_modules
+web/public/dist
+docs
+cloudflare/node_modules

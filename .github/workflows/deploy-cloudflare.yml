@@ -1,0 +1,42 @@
+# Ask Sauby · MyFlipKart.com — deploy the public demo to Cloudflare (Worker + Container).
+# Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+#
+# One-time setup in GitHub → Settings → Secrets and variables → Actions:
+#   Secrets:   CLOUDFLARE_API_TOKEN  (from the "Edit Cloudflare Workers" template; add Containers if deploy asks)
+#              CLOUDFLARE_ACCOUNT_ID
+#              WORKERS_AI_TOKEN      (optional: token with "Workers AI: Read" to turn on the LLM path)
+#   Variable:  DEPLOY_CLOUDFLARE = true   (turns on deploys from main)
+# Then: Actions → "deploy-cloudflare" → Run workflow (or push to main).
+name: deploy-cloudflare
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["backend/**", "web/**", "cloudflare/**", "Dockerfile"]
+permissions:
+  contents: read
+concurrency: { group: deploy-cloudflare, cancel-in-progress: false }
+jobs:
+  deploy:
+    if: vars.DEPLOY_CLOUDFLARE == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Install Worker dependencies
+        working-directory: cloudflare
+        run: npm install --no-audit --no-fund && npx tsc --noEmit
+      - name: Deploy (builds the Docker image and pushes it to Cloudflare)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare
+          command: deploy
+          secrets: |
+            WORKERS_AI_TOKEN
+            CF_ACCOUNT_ID
+        env:
+          WORKERS_AI_TOKEN: ${{ secrets.WORKERS_AI_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

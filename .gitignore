@@ -5,3 +5,6 @@ web/node_modules/
 web/public/dist/
 *.pem
 .DS_Store
+cloudflare/node_modules/
+.wrangler/
+cloudflare/.wrangler/
