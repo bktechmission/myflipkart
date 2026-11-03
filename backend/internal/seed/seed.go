@@ -164,6 +164,7 @@ var Policies = []PolicyDoc{
 		"You can return most items within 30 days of delivery for a full refund. Items must be in original condition with all accessories.",
 		"Opened headphones and earbuds can be returned only if defective, for hygiene reasons.",
 		"To start a return, ask Sauby to return your order and you will get a return authorization (RMA) number and a prepaid label.",
+		"Returns worth more than $30, and any return beyond 3 in 30 days, are reviewed by a teammate before the label is issued.",
 	}},
 	{ID: "cancellation", Title: "Order Cancellation", Version: 1, Paras: []string{
 		"Orders can be cancelled any time before they ship, while the status is 'placed'. Cancelled orders are refunded automatically.",
@@ -174,8 +175,20 @@ var Policies = []PolicyDoc{
 		"Express shipping costs $15 and arrives in 1-2 business days. MyFlipKart.com ships to all 50 US states.",
 	}},
 	{ID: "refunds", Title: "Refunds", Version: 1, Paras: []string{
-		"Refunds are issued to the original payment method within 5-7 business days after a return is approved.",
+		"Your money back: refunds are issued to the original payment method within 5-7 business days, after the returned item reaches our warehouse. We don't refund items that haven't been returned.",
+		"If an item never arrived, a teammate checks with the courier and refunds you without a return when it was lost.",
 		"Shipping fees are not refunded unless the item arrived damaged or defective.",
+	}},
+	{ID: "replacements", Title: "Replacements", Version: 1, Paras: []string{
+		"Prefer a new one? A faulty or wrong item can be swapped for a free replacement (exchange) up to a month after it arrives, when it's in stock. Ship the original to us with the prepaid label we email.",
+		"Each order can be swapped once. Replacements worth more than $500 get a quick teammate review before they ship.",
+	}},
+	{ID: "ordering", Title: "Placing Orders", Version: 1, Paras: []string{
+		"You can buy in chat: Sauby confirms the item, quantity, total and payment card before placing the order. Up to 3 of an item per order.",
+		"Orders over $1000, or more than 3 orders in a day, get a quick teammate review before they ship. You're only charged once approved.",
+	}},
+	{ID: "sellers", Title: "Marketplace Sellers", Version: 1, Paras: []string{
+		"Products on MyFlipKart.com are sold by independent sellers. Complaints about a seller (fake or wrong items, misleading listings, rude service) go to a teammate who follows up with the seller.",
 	}},
 	{ID: "warranty", Title: "Warranty", Version: 1, Paras: []string{
 		"All electronics include a 1-year limited manufacturer warranty covering defects in materials and workmanship.",
@@ -206,6 +219,21 @@ func Products() []model.Product {
 		}
 	}
 	return out
+}
+
+// Sellers on the marketplace, by category (orders and complaints name the seller).
+var sellers = map[string]string{
+	"headphones": "SoundCity Retail", "laptops": "ByteBarn", "smartphones": "MobileMart",
+	"smartwatches": "TimeTech Store", "running shoes": "StrideHouse", "coffee makers": "BrewWorks",
+	"backpacks": "TrailGear Co.", "monitors": "PixelDepot",
+}
+
+// SellerFor names the marketplace seller for a product category.
+func SellerFor(category string) string {
+	if s, ok := sellers[category]; ok {
+		return s
+	}
+	return "MyFlipKart Retail"
 }
 
 func PageText(p model.Product) string {
@@ -245,8 +273,9 @@ var orderSpecs = map[string][]orderSpec{
 		{"O5102", "shipped", 1, []string{"P1040"}},
 		{"O5103", "placed", 0, []string{"P1033"}},
 		{"O5104", "delivered", 45, []string{"P1011"}},
-		{"O5105", "return_requested", 10, []string{"P1036"}},
+		{"O5105", "return_received", 10, []string{"P1036"}}, // item is back at the warehouse: refundable
 		{"O5106", "delivered", 8, []string{"P1005"}},
+		{"O5107", "return_requested", 7, []string{"P1041"}}, // label sent, item not back yet: no refund yet
 	},
 }
 
@@ -261,10 +290,10 @@ func Orders(products []model.Product, today time.Time, extraCID string) []model.
 		delivered := today.AddDate(0, 0, -s.DaysAgo)
 		o := model.Order{ID: id, CustomerID: cid, Status: s.Status, Items: s.Items,
 			PlacedOn: delivered.AddDate(0, 0, -3).Format("2006-01-02"), UpdatedAt: today}
-		if s.Status == "delivered" || s.Status == "return_requested" {
+		if s.Status == "delivered" || s.Status == "return_requested" || s.Status == "return_received" {
 			o.DeliveredOn = delivered.Format("2006-01-02")
 		}
-		if s.Status == "return_requested" {
+		if s.Status == "return_requested" || s.Status == "return_received" {
 			o.RMA = "RMA-" + id[1:]
 		}
 		for _, i := range s.Items {

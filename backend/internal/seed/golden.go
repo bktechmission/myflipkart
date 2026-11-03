@@ -105,6 +105,7 @@ func Golden(products []model.Product) []GoldenRow {
 	g = append(g,
 		GoldenRow{Query: "start a return", Type: "choose", Tool: "return_order", ExpectOK: b(true), Choose: true},
 		GoldenRow{Query: "I want to cancel my order", Type: "choose", Tool: "cancel_order", ExpectOK: b(true), Choose: true},
+		GoldenRow{Query: "I'd like a replacement", Type: "choose", Tool: "replace_order", ExpectOK: b(true), Choose: true},
 	)
 	o := func(q, typ, tool, id string, ok bool, as string) GoldenRow {
 		return GoldenRow{Query: q, Type: typ, Tool: tool, Args: map[string]any{"order_id": id}, ExpectOK: b(ok), As: as}
@@ -128,9 +129,21 @@ func Golden(products []model.Product) []GoldenRow {
 		GoldenRow{Query: "tell me about P1003", Type: "product_id", Tool: "get_product", Args: map[string]any{"product_id": "P1003"}, ExpectOK: b(true)},
 		GoldenRow{Query: "details for product P1040", Type: "product_id", Tool: "get_product", Args: map[string]any{"product_id": "P1040"}, ExpectOK: b(true)},
 		GoldenRow{Query: "hi there!", Type: "chitchat", Tool: "chitchat"},
-		GoldenRow{Query: "place order this", Type: "chitchat", Tool: "chitchat"},
-		GoldenRow{Query: "I want to buy P1020", Type: "chitchat", Tool: "chitchat"},
 		GoldenRow{Query: "thanks, that's all", Type: "chitchat", Tool: "chitchat"},
+		// buying, replacements, complaints, order status filters
+		GoldenRow{Query: "I want to buy P1020", Type: "order", Tool: "place_order", Args: map[string]any{"product_id": "P1020"}, ExpectOK: b(true)},
+		GoldenRow{Before: "tell me about P1020", Query: "place order this", Type: "context", Tool: "place_order", Args: map[string]any{"product_id": "P1020"}, ExpectOK: b(true)},
+		GoldenRow{Query: "buy 9 of P1020", Type: "order", Tool: "place_order", Args: map[string]any{"product_id": "P1020", "quantity": 9.0}, ExpectOK: b(false)},
+		o("can I get a replacement for O5101", "order", "replace_order", "O5101", true, "C1002"),
+		o("replace O5106 please", "order", "replace_order", "O5106", false, "C1002"),                 // item out of stock: offer a return
+		o("replace O5104 please", "order", "replace_order", "O5104", false, "C1002"),                 // 45 days: outside the window
+		o("refund O5107", "refund", "request_refund", "O5107", true, "C1002"),                        // item not back yet: refund set to release on receipt
+		esc(o("refund O5106, it never arrived", "refund", "request_refund", "O5106", true, "C1002")), // nothing to return: a person checks
+		GoldenRow{Query: "my package for O5101 never arrived", Type: "complaint", Tool: "file_complaint", Args: map[string]any{"order_id": "O5101"}, ExpectOK: b(true), As: "C1002"},
+		GoldenRow{Query: "the seller sent me a fake item on O5106", Type: "complaint", Tool: "file_complaint", Args: map[string]any{"order_id": "O5106"}, ExpectOK: b(true), As: "C1002"},
+		GoldenRow{Query: "which orders haven't arrived yet", Type: "order", Tool: "list_orders", Args: map[string]any{"status": "not_delivered"}, ExpectOK: b(true)},
+		GoldenRow{Query: "what hasn't been delivered yet", Type: "order", Tool: "list_orders", Args: map[string]any{"status": "not_delivered"}, ExpectOK: b(true)},
+		GoldenRow{Query: "how do replacements work?", Type: "policy", Tool: "policy_search", Index: "policies", Relevant: []string{"replacements"}},
 		// order history and multi-turn context
 		GoldenRow{Query: "get my orders", Type: "order", Tool: "list_orders", ExpectOK: b(true)},
 		GoldenRow{Query: "show my order history", Type: "order", Tool: "list_orders", ExpectOK: b(true)},

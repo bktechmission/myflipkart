@@ -16,6 +16,7 @@ import (
 
 	"asksauby/internal/model"
 	"asksauby/internal/search"
+	"asksauby/internal/seed"
 	"asksauby/internal/store"
 )
 
@@ -28,11 +29,18 @@ var ToolSchemas = []map[string]any{
 			"min_price": {"number", "Lower bound in USD; omit if none"}, "max_price": {"number", "Upper bound in USD; omit if none"}}, "query"),
 	fn("get_product", "Get full details for one product by ID like P1003.", props{"product_id": {"string", ""}}, "product_id"),
 	fn("get_order", "Look up status, items and dates of one of the customer's orders by ID like O5003. Use LATEST for their most recent order.", props{"order_id": {"string", "Order ID, or LATEST"}}, "order_id"),
-	fn("list_orders", "List the customer's recent orders (order history).", props{}),
+	fn("list_orders", "List the customer's orders with a status summary. status: all (default), open (anything not finished), not_delivered (placed or shipped), delivered, returns.",
+		props{"status": {"string", "all | open | not_delivered | delivered | returns"}}),
+	fn("place_order", "Place a new order for a product (customer confirms first). Omit product_id if the customer said 'this' without an ID.",
+		props{"product_id": {"string", "Product ID like P1020"}, "quantity": {"number", "1-3, default 1"}}),
+	fn("replace_order", "Send a free replacement for a delivered order (within 30 days, item in stock) instead of a refund. Omit order_id if not given.",
+		props{"order_id": {"string", "Order ID if the customer gave one"}, "reason": {"string", "What was wrong"}}),
+	fn("file_complaint", "Log a complaint about a seller, a delivery (item never arrived) or a faulty product, and bring in a human teammate.",
+		props{"order_id": {"string", "Order ID if known"}, "about": {"string", "seller | delivery | product | other"}, "summary": {"string", "The customer's complaint in one line"}}, "summary"),
 	fn("cancel_order", "Cancel one of the customer's orders before it ships (refund is automatic). Omit order_id if not given.", props{"order_id": {"string", "Order ID if the customer gave one"}}),
 	fn("return_order", "Start a return (RMA + label) for a delivered order within the return window. Omit order_id if not given.",
 		props{"order_id": {"string", "Order ID if the customer gave one"}, "reason": {"string", "Why the customer is returning it"}}),
-	fn("request_refund", "Refund an order: a delivered order within the return window, or one whose return was started. Omit order_id if not given.",
+	fn("request_refund", "Refund an order. Money is released only after the returned item reaches us (or a teammate confirms it never arrived). Omit order_id if not given.",
 		props{"order_id": {"string", "Order ID if the customer gave one"}, "reason": {"string", "Why the customer wants a refund"}}),
 	fn("policy_search", "Answer general questions about MyFlipKart.com policies: returns, refunds, cancellation, shipping, warranty. Use when no order ID is given.",
 		props{"query": {"string", ""}}, "query"),
@@ -41,9 +49,9 @@ var ToolSchemas = []map[string]any{
 }
 
 var ToolNames = []string{"search_products", "price_search", "get_product", "list_orders", "get_order", "cancel_order",
-	"return_order", "request_refund", "policy_search", "handoff", "chitchat"}
+	"return_order", "replace_order", "request_refund", "place_order", "file_complaint", "policy_search", "handoff", "chitchat"}
 
-var ConfirmTools = map[string]bool{"cancel_order": true, "return_order": true, "request_refund": true}
+var ConfirmTools = map[string]bool{"cancel_order": true, "return_order": true, "request_refund": true, "place_order": true, "replace_order": true}
 
 type props map[string][2]string
 
@@ -65,6 +73,7 @@ type Card struct {
 	Price    float64     `json:"price"`
 	Rating   float64     `json:"rating"`
 	Stock    int         `json:"stock"`
+	Seller   string      `json:"seller"`
 	Features []string    `json:"features"`
 	Scores   *search.Hit `json:"scores,omitempty"`
 }
@@ -111,11 +120,81 @@ type Tools struct {
 	ReturnWindow    int
 	AutoRefundLimit float64 // refunds above this go to a human (default $30)
 	MaxAutoRefunds  int     // per customer per 24h before a human must look (velocity guardrail)
+
+	// Ordering guardrails (zero values get safe defaults, see limits()).
+	MaxQty             int     // per item per order
+	OrderReviewOver    float64 // orders above this are held for a teammate
+	MaxOrdersPerDay    int     // more than this in 24h: held for a teammate
+	ReplaceReviewOver  float64 // replacements above this value are held for a teammate
+	MaxReturnsPerMonth int     // more returns than this in 30 days go to a teammate, whatever the amount
 }
+
+func (t *Tools) limits() (maxQty int, orderOver float64, perDay int, replaceOver float64) {
+	maxQty, orderOver, perDay, replaceOver = t.MaxQty, t.OrderReviewOver, t.MaxOrdersPerDay, t.ReplaceReviewOver
+	if maxQty <= 0 {
+		maxQty = 3
+	}
+	if orderOver <= 0 {
+		orderOver = 1000
+	}
+	if perDay <= 0 {
+		perDay = 3
+	}
+	if replaceOver <= 0 {
+		replaceOver = 500
+	}
+	return
+}
+
+func (t *Tools) maxReturns() int {
+	if t.MaxReturnsPerMonth <= 0 {
+		return 3
+	}
+	return t.MaxReturnsPerMonth
+}
+
+// returnGuard: returns worth more than the auto limit, or more than N returns in 30
+// days, always go to a human before a label is issued.
+func (t *Tools) returnGuard(tx *store.Txn, o model.Order) (why, guardrail string) {
+	if t.AutoRefundLimit > 0 && o.Total > t.AutoRefundLimit {
+		return fmt.Sprintf("returns over $%.0f are reviewed by a teammate", t.AutoRefundLimit), "return_over_limit"
+	}
+	n := 0
+	for _, x := range tx.OrdersFor(o.CustomerID) {
+		if x.ID != o.ID && !x.ReturnStartedAt.IsZero() && time.Since(x.ReturnStartedAt) < 30*24*time.Hour {
+			n++
+		}
+	}
+	if n >= t.maxReturns() {
+		return fmt.Sprintf("more than %d returns in 30 days are reviewed by a teammate", t.maxReturns()), "return_velocity"
+	}
+	return "", ""
+}
+
+// startReturn issues the RMA, or holds the return for a teammate when a guardrail fires.
+// The refund always waits for the item (RefundOnReceipt).
+func (t *Tools) startReturn(tx *store.Txn, o model.Order, reason, sid string, res *ToolResult) {
+	o.RefundOnReceipt, o.ReturnStartedAt = true, time.Now().UTC()
+	if why, g := t.returnGuard(tx, o); why != "" {
+		o.Status = "return_pending_approval"
+		tx.PutOrder(o)
+		tk := t.hold(tx, o, "return", o.Total, why, reason, sid, "delivered", false)
+		res.Escalated, res.Guardrail = true, g
+		res.Message = fmt.Sprintf("Because %s, I've sent your return for %s to a teammate (ticket %s). Once they approve it you'll get the RMA and a prepaid label, and your $%.2f refund is released when the item reaches us.", why, o.ID, tk, o.Total)
+		return
+	}
+	o.Status, o.RMA = "return_requested", rma(o.ID)
+	tx.PutOrder(o)
+	res.Committed = true
+	res.Message = fmt.Sprintf("Return started for %s. Your RMA is %s and a prepaid label is on its way. Your $%.2f refund is released automatically once the item reaches our warehouse.", o.ID, o.RMA, o.Total)
+}
+
+// Phrases that mean "the item never reached me": no item to return, so a human checks with the courier.
+var notReceivedRe = regexp.MustCompile(`(?i)\b(never (arrived|came|got here|received|got it|delivered)|not (been )?(received|arrived)|didn'?t (receive|arrive|get (it|my|the))|hasn'?t arrived|missing|stolen|empty box|lost (in|package|parcel)?)\b`)
 
 func (t *Tools) card(id string, h *search.Hit) Card {
 	p, _ := t.R.Product(id)
-	return Card{p.ID, p.Name, p.Category, p.Price, p.Rating, p.Stock, p.Features, h}
+	return Card{p.ID, p.Name, p.Category, p.Price, p.Rating, p.Stock, seed.SellerFor(p.Category), p.Features, h}
 }
 
 func (t *Tools) view(o model.Order) *OrderView {
@@ -161,7 +240,7 @@ func (t *Tools) Run(name string, args map[string]any, cid, sid string, commit bo
 			res.Chunks = append(res.Chunks, Chunk{h, c.Doc, c.Title, c.Text})
 		}
 		return res
-	case "get_order", "cancel_order", "return_order", "request_refund":
+	case "get_order", "cancel_order", "return_order", "request_refund", "replace_order":
 		if strings.HasPrefix(cid, "G-") { // guests can browse and ask, never touch orders
 			return ToolResult{Message: "Please sign in with your MyFlipKart.com account to view or change orders.", Guardrail: "guest_blocked"}
 		}
@@ -181,15 +260,21 @@ func (t *Tools) Run(name string, args map[string]any, cid, sid string, commit bo
 		if strings.HasPrefix(cid, "G-") {
 			return ToolResult{Message: "Please sign in with your MyFlipKart.com account to see your orders.", Guardrail: "guest_blocked"}
 		}
-		mine := t.S.OrdersFor(cid)
-		res := ToolResult{OK: true}
-		for i := len(mine) - 1; i >= 0 && len(res.Orders) < 6; i-- { // newest first
-			res.Orders = append(res.Orders, t.view(mine[i]))
+		return t.listOrders(cid, str("status"))
+	case "place_order":
+		if strings.HasPrefix(cid, "G-") {
+			return ToolResult{Message: "Please sign in with your MyFlipKart.com account to place an order.", Guardrail: "guest_blocked"}
 		}
-		if len(res.Orders) == 0 {
-			res.Message = "I don't see any orders on your account yet."
+		q := 1
+		if n := num(args["quantity"]); n != nil {
+			q = int(*n)
 		}
-		return res
+		return t.placeOrder(strings.ToUpper(str("product_id")), q, cid, sid, commit)
+	case "file_complaint":
+		if strings.HasPrefix(cid, "G-") {
+			return ToolResult{Message: "Please sign in so a teammate can see your account and orders.", Guardrail: "guest_blocked"}
+		}
+		return t.complaint(strings.ToUpper(str("order_id")), str("about"), str("summary"), cid, sid)
 	case "handoff":
 		if strings.HasPrefix(cid, "G-") {
 			return ToolResult{Message: "Please sign in so a teammate can see your account and orders.", Guardrail: "guest_blocked"}
@@ -197,10 +282,9 @@ func (t *Tools) Run(name string, args map[string]any, cid, sid string, commit bo
 		if open, ok := t.S.OpenLiveTicket(sid); ok { // idempotent: one live ticket per conversation
 			return ToolResult{OK: true, Ticket: &open, Message: "A teammate is already on the way (ticket " + open.ID + ")."}
 		}
-		tk := model.Ticket{ID: fmt.Sprintf("T%d", time.Now().UnixNano()%1e8), Kind: "live", CustomerID: cid, SessionID: sid,
-			Summary: str("summary"), Status: "waiting", CreatedAt: time.Now().UTC()}
-		if err := t.S.Tx(func(tx *store.Txn) error { tx.PutTicket(tk); return nil }); err != nil {
-			return ToolResult{Message: err.Error()}
+		tk, err := t.openLive(cid, sid, str("summary"), "")
+		if err != nil {
+			return ToolResult{Message: "Sorry, I couldn't reach the support queue just now. Please try again in a moment."}
 		}
 		return ToolResult{OK: true, Ticket: &tk, Message: "I'm connecting you with a teammate now. They'll see our conversation, so you won't need to repeat yourself."}
 	case "chitchat":
@@ -224,8 +308,13 @@ func (t *Tools) search(q string, lo, hi *float64) ToolResult {
 // orderAction enforces authorization and business rules. Everything runs inside
 // a store transaction, so eligibility is re-checked under the lock at commit time
 // (no double refunds, no cancel after the warehouse marked it shipped).
+//
+// Money rule: we never refund an item that wasn't returned. A refund is released
+// when the returned item reaches the warehouse (return_received), or after a
+// teammate confirms an item never arrived.
 func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) ToolResult {
 	var res ToolResult
+	var stock map[string]int // product stock to mirror into the search index after commit
 	err := t.S.Tx(func(tx *store.Txn) error {
 		o, ok := tx.Order(oid)
 		if !ok || o.CustomerID != cid { // same answer either way: never reveal others' orders exist
@@ -233,57 +322,153 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 			return nil
 		}
 		res.Order = t.view(o)
-		age := -1
-		if o.DeliveredOn != "" {
-			d, _ := time.Parse("2006-01-02", o.DeliveredOn)
-			age = int(time.Since(d).Hours() / 24)
-		}
+		age := ageDays(o)
+		status := strings.ReplaceAll(o.Status, "_", " ")
 		deny := func(msg string) { res.OK, res.Message = false, msg }
+		if o.Status == "on_hold" && kind != "get_order" && kind != "cancel_order" {
+			deny(fmt.Sprintf("Order %s is waiting for a quick review by a teammate, so I can't change it yet. You can still cancel it.", oid))
+			return nil
+		}
+		if a, waiting := tx.PendingApprovalFor(oid); waiting && (kind == "return_order" || kind == "replace_order") {
+			res.OK, res.Escalated, res.Approval = true, true, &a
+			res.Message = fmt.Sprintf("Order %s is already with a teammate (ticket %s), so I'll leave it with them. You'll get an email once it's decided.", oid, a.TicketID)
+			return nil
+		}
 		switch kind {
 		case "get_order":
 			res.OK = true
 			return nil
 		case "cancel_order":
-			if o.Status != "placed" {
+			if o.Status != "placed" && o.Status != "on_hold" {
 				extra := ""
-				if o.Status == "shipped" {
-					extra = " It's on the way — once it's delivered I can start a return for you."
+				switch o.Status {
+				case "shipped":
+					extra = " It's on the way — once it's delivered I can start a return or send a replacement."
+				case "delivered":
+					extra = " It's already delivered — I can start a return or send a replacement instead."
 				}
-				deny(fmt.Sprintf("Order %s is already '%s', so it can't be cancelled.%s", oid, o.Status, extra))
+				deny(fmt.Sprintf("Order %s is already %s, so it can't be cancelled.%s", oid, status, extra))
+				if o.Status == "delivered" {
+					res.Choices = []Choice{{"Return it", "return " + oid}, {"Replace it", "replace " + oid}}
+				}
 				return nil
 			}
 			res.OK = true
+			paid := o.Total > 0 && o.Status == "placed" // held orders were never charged
 			if !commit {
 				res.NeedsConfirm = true
-				res.Message = fmt.Sprintf("cancel order %s and refund $%.2f to your original payment method", oid, o.Total)
+				switch {
+				case o.ReplacementFor != "":
+					res.Message = fmt.Sprintf("cancel replacement order %s (no charge; your original order %s stays as it is)", oid, o.ReplacementFor)
+				case paid:
+					res.Message = fmt.Sprintf("cancel order %s and refund $%.2f to your original payment method", oid, o.Total)
+				default:
+					res.Message = fmt.Sprintf("cancel order %s (you haven't been charged)", oid)
+				}
 				return nil
 			}
 			o.Status = "cancelled"
-			rf := model.Refund{ID: "RF-" + oid[1:], OrderID: oid, CustomerID: cid, Amount: o.Total,
-				Reason: "cancelled before shipping", CreatedAt: time.Now().UTC()}
-			tx.PutOrder(o)
-			tx.PutRefund(rf)
-			res.Refund, res.Committed = &rf, true
-			res.Message = fmt.Sprintf("Order %s is cancelled and $%.2f is being refunded (refund %s, 5-7 business days).", oid, o.Total, rf.ID)
-		case "return_order":
-			if o.Status != "delivered" {
-				deny(fmt.Sprintf("Order %s is '%s', so a return can't be started.", oid, strings.ReplaceAll(o.Status, "_", " ")))
-				return nil
+			stock = t.restock(tx, o)
+			if o.ReplacementFor != "" { // the original goes back to delivered: the customer can return it instead
+				if orig, ok := tx.Order(o.ReplacementFor); ok && orig.ReplacedBy == oid {
+					orig.Status, orig.ReplacedBy, orig.RMA = "delivered", "", ""
+					tx.PutOrder(orig)
+				}
 			}
-			if age > t.ReturnWindow {
-				deny(fmt.Sprintf("Order %s was delivered %d days ago, outside the %d-day return window.", oid, age, t.ReturnWindow))
+			if a, waiting := tx.PendingApprovalFor(oid); waiting { // a held order: close its review
+				a.Status, a.DecidedBy, a.DecidedAt = "withdrawn", "customer", time.Now().UTC()
+				tx.PutApproval(a)
+			}
+			tx.PutOrder(o)
+			res.Committed = true
+			if paid {
+				rf := model.Refund{ID: "RF-" + oid[1:], OrderID: oid, CustomerID: cid, Amount: o.Total,
+					Reason: "cancelled before shipping", CreatedAt: time.Now().UTC()}
+				tx.PutRefund(rf)
+				res.Refund = &rf
+				res.Message = fmt.Sprintf("Order %s is cancelled and $%.2f is being refunded (refund %s, 5-7 business days).", oid, o.Total, rf.ID)
+			} else {
+				res.Message = fmt.Sprintf("Order %s is cancelled. You weren't charged.", oid)
+			}
+		case "return_order":
+			if msg := t.notReturnable(o, age, "return"); msg != "" {
+				deny(msg)
 				return nil
 			}
 			res.OK = true
 			if !commit {
 				res.NeedsConfirm = true
-				res.Message = fmt.Sprintf("start a return for order %s and email you a prepaid label", oid)
+				if why, _ := t.returnGuard(tx, o); why != "" {
+					res.Message = fmt.Sprintf("send your return for order %s ($%.2f) to a teammate for approval, because %s. After approval you get a prepaid label, and the refund is released once the item reaches us", oid, o.Total, why)
+				} else {
+					res.Message = fmt.Sprintf("start a return for order %s and email you a prepaid label. Your $%.2f refund is released as soon as the item reaches us", oid, o.Total)
+				}
+				if t.inStock(tx, o) && o.ReplacementFor == "" {
+					res.Choices = []Choice{{"Send a free replacement instead", "replace " + oid}}
+				}
 				return nil
 			}
-			o.Status, o.RMA = "return_requested", fmt.Sprintf("RMA-%s-%s", oid[1:], time.Now().Format("0102"))
+			t.startReturn(tx, o, reason, sid, &res)
+		case "replace_order":
+			if o.Status == "replacement_requested" && o.ReplacedBy != "" { // idempotent
+				res.OK = true
+				res.Message = fmt.Sprintf("A replacement for %s is already on its way (order %s).", oid, o.ReplacedBy)
+				return nil
+			}
+			if o.ReplacementFor != "" { // a replacement of a replacement: a person should look
+				deny(fmt.Sprintf("Order %s is already a replacement, so I can't send another one automatically. A teammate can sort this out for you.", oid))
+				res.Choices, res.Guardrail = []Choice{{"Talk to a person", "talk to a person"}, {"Return it instead", "return " + oid}}, "second_replacement"
+				return nil
+			}
+			if msg := t.notReturnable(o, age, "replace"); msg != "" {
+				deny(msg)
+				return nil
+			}
+			if !t.inStock(tx, o) {
+				deny(fmt.Sprintf("Sorry, the item in %s is out of stock, so I can't send a replacement right now. I can start a return for a refund instead.", oid))
+				res.Choices = []Choice{{"Return for a refund", "return " + oid}}
+				return nil
+			}
+			_, _, _, over := t.limits()
+			value := 0.0
+			for _, it := range o.Items {
+				if p, ok := tx.Product(it); ok {
+					value += p.Price
+				}
+			}
+			review := value > over
+			res.OK = true
+			if !commit {
+				res.NeedsConfirm = true
+				res.Message = fmt.Sprintf("send a free replacement for order %s and email you a prepaid label to send the original back. No charge", oid)
+				if review {
+					res.Message += fmt.Sprintf(". Replacements over $%.0f get a quick teammate review before they ship", over)
+				}
+				return nil
+			}
+			nid, err := tx.NextOrderID()
+			if err != nil {
+				return err
+			}
+			n := model.Order{ID: nid, CustomerID: cid, Status: "placed", Items: o.Items, PlacedOn: today(),
+				ReplacementFor: oid, Payment: "no charge (replacement)"}
+			if review {
+				n.Status = "on_hold"
+			}
+			stock = t.takeStock(tx, n.Items)
+			o.Status, o.ReplacedBy, o.RMA = "replacement_requested", nid, rma(oid)
+			tx.PutOrder(n)
 			tx.PutOrder(o)
-			res.Committed = true
-			res.Message = fmt.Sprintf("Return started for %s. Your RMA is %s and a prepaid label is on its way.", oid, o.RMA)
+			if review {
+				t.hold(tx, n, "replacement", value, fmt.Sprintf("replacements over $%.0f need a teammate review", over), reason, sid, "delivered", false)
+				res.Escalated, res.Guardrail = true, "replacement_review"
+				res.Message = fmt.Sprintf("Replacement order %s is created and waiting for a quick teammate review (replacements over $%.0f). Send the original back with RMA %s; the label is in your email.", nid, over, o.RMA)
+			} else {
+				res.Committed = true
+				res.Message = fmt.Sprintf("A free replacement is on its way: order %s ships in 1-2 business days. Please send the original back with RMA %s (the prepaid label is in your email).", nid, o.RMA)
+			}
+			res.Order = t.view(n)
+			return nil
 		case "request_refund":
 			if r, done := tx.Refund(oid); done { // idempotent: a second request returns the same refund
 				res.OK, res.Refund = true, &r
@@ -295,65 +480,101 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 				res.Message = fmt.Sprintf("Your refund for %s is already with a teammate for approval (ticket %s). You'll get an email once it's decided.", oid, a.TicketID)
 				return nil
 			}
-			switch {
-			case o.Status == "return_requested":
-			case o.Status == "delivered" && age <= t.ReturnWindow:
-			case o.Status == "delivered":
-				deny(fmt.Sprintf("Order %s was delivered %d days ago, outside the %d-day refund window. Your item may still be covered by the 1-year warranty.", oid, age, t.ReturnWindow))
-				return nil
-			case o.Status == "placed":
+			switch o.Status {
+			case "return_received": // the item is back: money can move now
+				why, g := t.refundGuard(tx, o)
+				res.OK = true
+				if !commit {
+					res.NeedsConfirm = true
+					if why != "" {
+						res.Message = fmt.Sprintf("send your $%.2f refund for order %s to a teammate for approval (%s)", o.Total, oid, why)
+					} else {
+						res.Message = fmt.Sprintf("refund $%.2f for order %s to your original payment method (we've received the item)", o.Total, oid)
+					}
+					return nil
+				}
+				if why != "" {
+					o.Status = "refund_pending_approval"
+					tx.PutOrder(o)
+					tk := t.hold(tx, o, "refund", o.Total, why, reason, sid, "return_received", false)
+					res.Escalated, res.Guardrail = true, g
+					res.Message = fmt.Sprintf("I've sent your $%.2f refund for %s to a teammate for approval because %s (ticket %s). Most are decided within a few hours, and you'll get an email.", o.Total, oid, why, tk)
+				} else {
+					rf := issueRefund(tx, o, reason)
+					res.Refund, res.Committed = &rf, true
+					res.Message = fmt.Sprintf("Done — $%.2f refunded for order %s (refund %s, 5-7 business days).", o.Total, oid, rf.ID)
+				}
+			case "return_requested":
+				if o.RefundOnReceipt {
+					res.OK = true
+					res.Message = fmt.Sprintf("Your $%.2f refund for %s is set up: it's released as soon as the returned item reaches us (RMA %s). We haven't received it yet.", o.Total, oid, o.RMA)
+					return nil
+				}
+				res.OK = true
+				if !commit {
+					res.NeedsConfirm = true
+					res.Message = fmt.Sprintf("release your $%.2f refund for %s as soon as the returned item reaches us (RMA %s)", o.Total, oid, o.RMA)
+					return nil
+				}
+				o.RefundOnReceipt = true
+				tx.PutOrder(o)
+				res.Committed = true
+				res.Message = fmt.Sprintf("All set: your $%.2f refund for %s is released as soon as the returned item reaches us.", o.Total, oid)
+			case "delivered":
+				if notReceivedRe.MatchString(reason) { // nothing to return: a person checks with the courier
+					res.OK = true
+					if !commit {
+						res.NeedsConfirm = true
+						res.Message = fmt.Sprintf("send a missing-item claim for order %s ($%.2f) to a teammate. They check with the courier and refund you without a return if it was lost", oid, o.Total)
+						return nil
+					}
+					tk := t.hold(tx, o, "refund", o.Total, "item reported not received: a teammate checks with the courier", reason, sid, "delivered", true)
+					res.Escalated, res.Guardrail = true, "not_received_claim"
+					res.Message = fmt.Sprintf("I've opened a missing-item claim for %s (ticket %s). A teammate checks with the courier, usually within a day, and refunds $%.2f if it was lost.", oid, tk, o.Total)
+					return nil
+				}
+				if age > t.ReturnWindow {
+					deny(fmt.Sprintf("Order %s was delivered %d days ago, outside the %d-day refund window. Your item may still be covered by the 1-year warranty.", oid, age, t.ReturnWindow))
+					res.Choices = []Choice{{"Talk to a person", "talk to a person"}}
+					return nil
+				}
+				// Delivered and in the window: the refund needs the item back first.
+				res.OK = true
+				if !commit {
+					res.NeedsConfirm = true
+					if why, _ := t.returnGuard(tx, o); why != "" {
+						res.Message = fmt.Sprintf("send a return for order %s ($%.2f) to a teammate for approval, because %s. Refunds need the item back: after approval you get a prepaid label, and the money is released once the item reaches us", oid, o.Total, why)
+					} else {
+						res.Message = fmt.Sprintf("start a return for order %s (prepaid label by email). Your $%.2f refund is released once the item reaches us", oid, o.Total)
+					}
+					if t.inStock(tx, o) && o.ReplacementFor == "" {
+						res.Choices = []Choice{{"Send a free replacement instead", "replace " + oid}}
+					}
+					return nil
+				}
+				t.startReturn(tx, o, reason, sid, &res)
+			case "placed":
 				deny(fmt.Sprintf("Order %s hasn't shipped yet — cancelling it refunds you automatically. Want me to cancel it?", oid))
+				res.Choices = []Choice{{"Cancel it", "cancel " + oid}}
 				return nil
-			case o.Status == "shipped":
-				deny(fmt.Sprintf("Order %s is still in transit. Once it's delivered you can request a refund.", oid))
+			case "shipped":
+				if notReceivedRe.MatchString(reason) {
+					deny(fmt.Sprintf("Order %s is still in transit with the courier, so it hasn't been marked delivered yet. If it doesn't arrive in 3 business days, a teammate can open a claim.", oid))
+					res.Choices = []Choice{{"Talk to a person", "talk to a person"}}
+					return nil
+				}
+				deny(fmt.Sprintf("Order %s is still in transit. Once it's delivered you can return it for a refund.", oid))
+				return nil
+			case "replacement_requested":
+				deny(fmt.Sprintf("You chose a free replacement for %s (order %s), so there's no refund on it. If the replacement doesn't work out, I can return that one for a refund.", oid, o.ReplacedBy))
+				return nil
+			case "cancelled":
+				deny(fmt.Sprintf("Order %s was cancelled. Cancelled orders are refunded automatically when they were paid.", oid))
 				return nil
 			default:
-				deny(fmt.Sprintf("Order %s is '%s', so it can't be refunded.", oid, strings.ReplaceAll(o.Status, "_", " ")))
+				deny(fmt.Sprintf("Order %s is %s, so it can't be refunded.", oid, status))
 				return nil
 			}
-			// Guardrails: large refunds and unusual refund velocity need a human.
-			why := ""
-			if t.AutoRefundLimit > 0 && o.Total > t.AutoRefundLimit {
-				why = fmt.Sprintf("refunds over $%.0f need a human approval", t.AutoRefundLimit)
-				res.Guardrail = "amount_over_limit"
-			} else if t.MaxAutoRefunds > 0 && tx.RefundsSince(cid, time.Now().Add(-24*time.Hour)) >= t.MaxAutoRefunds {
-				why = fmt.Sprintf("more than %d refunds in 24 hours need a human review", t.MaxAutoRefunds)
-				res.Guardrail = "velocity_limit"
-			}
-			res.OK = true
-			if !commit {
-				res.NeedsConfirm = true
-				if why != "" {
-					res.Message = fmt.Sprintf("send your $%.2f refund request for order %s to a teammate for approval (%s)", o.Total, oid, why)
-				} else {
-					res.Message = fmt.Sprintf("refund $%.2f for order %s to your original payment method", o.Total, oid)
-				}
-				return nil
-			}
-			if why != "" {
-				now := time.Now().UTC()
-				tk := model.Ticket{ID: fmt.Sprintf("T%s%d", oid[1:], now.Unix()%10000), Kind: "approval", Status: "waiting", CustomerID: cid, SessionID: sid,
-					Summary: fmt.Sprintf("Approve refund $%.2f for %s (%s). Customer reason: %s", o.Total, oid, why, reason), CreatedAt: now}
-				a := model.Approval{ID: "AP-" + oid[1:] + fmt.Sprint(now.Unix()%10000), OrderID: oid, CustomerID: cid, SessionID: sid, Amount: o.Total,
-					Reason: reason, Why: why, PrevStatus: o.Status, Status: "pending", TicketID: tk.ID, CreatedAt: now}
-				o.Status = "refund_pending_approval"
-				tx.PutOrder(o)
-				tx.PutTicket(tk)
-				tx.PutApproval(a)
-				res.Escalated, res.Approval = true, &a
-				res.Message = fmt.Sprintf("I've sent your $%.2f refund for %s to a teammate for approval because %s (ticket %s). Most are decided within a few hours, and you'll get an email.", o.Total, oid, why, tk.ID)
-				return nil
-			}
-			if o.RMA == "" {
-				o.RMA = fmt.Sprintf("RMA-%s-%s", oid[1:], time.Now().Format("0102"))
-			}
-			o.Status = "refunded"
-			rf := model.Refund{ID: "RF-" + oid[1:], OrderID: oid, CustomerID: cid, Amount: o.Total,
-				Reason: reason, CreatedAt: time.Now().UTC()}
-			tx.PutOrder(o)
-			tx.PutRefund(rf)
-			res.Refund, res.Committed = &rf, true
-			res.Message = fmt.Sprintf("Done — $%.2f refunded for order %s (refund %s, 5-7 business days). Please ship the item back with RMA %s.", o.Total, oid, rf.ID, o.RMA)
 		}
 		if res.Committed || res.Escalated { // show the order as it is after this change
 			o2, _ := tx.Order(oid)
@@ -364,6 +585,369 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 	if err != nil {
 		return ToolResult{Message: "Sorry, I couldn't save that change. Nothing was charged or refunded. Please try again."}
 	}
+	t.mirrorStock(stock)
+	return res
+}
+
+// notReturnable explains why a delivered-item action (return / replace) can't happen, or "".
+func (t *Tools) notReturnable(o model.Order, age int, verb string) string {
+	switch {
+	case o.Status == "delivered" && age <= t.ReturnWindow:
+		return ""
+	case o.Status == "delivered":
+		return fmt.Sprintf("Order %s was delivered %d days ago, outside the %d-day window to %s it. It may still be covered by the 1-year warranty — a teammate can help.", o.ID, age, t.ReturnWindow, verb)
+	case o.Status == "placed" || o.Status == "on_hold":
+		return fmt.Sprintf("Order %s hasn't shipped yet, so there's nothing to %s. You can cancel it instead.", o.ID, verb)
+	case o.Status == "shipped":
+		return fmt.Sprintf("Order %s is still on its way. Once it's delivered, I can %s it if something's wrong.", o.ID, verb)
+	case o.Status == "replacement_requested":
+		return fmt.Sprintf("A replacement for %s is already on its way (order %s).", o.ID, o.ReplacedBy)
+	case strings.HasPrefix(o.Status, "return") || strings.HasPrefix(o.Status, "refund"):
+		return fmt.Sprintf("Order %s already has a return in progress (%s).", o.ID, strings.ReplaceAll(o.Status, "_", " "))
+	}
+	return fmt.Sprintf("Order %s is %s, so I can't %s it.", o.ID, strings.ReplaceAll(o.Status, "_", " "), verb)
+}
+
+// refundGuard: large refunds and unusual refund velocity need a human.
+func (t *Tools) refundGuard(tx *store.Txn, o model.Order) (why, guardrail string) {
+	if o.RefundApproved {
+		return "", ""
+	}
+	if t.AutoRefundLimit > 0 && o.Total > t.AutoRefundLimit {
+		return fmt.Sprintf("refunds over $%.0f need a human approval", t.AutoRefundLimit), "amount_over_limit"
+	}
+	if t.MaxAutoRefunds > 0 && tx.RefundsSince(o.CustomerID, time.Now().Add(-24*time.Hour)) >= t.MaxAutoRefunds {
+		return fmt.Sprintf("more than %d refunds in 24 hours need a human review", t.MaxAutoRefunds), "velocity_limit"
+	}
+	return "", ""
+}
+
+// hold creates a back-office ticket + approval for a teammate and returns the ticket ID.
+func (t *Tools) hold(tx *store.Txn, o model.Order, kind string, amount float64, why, reason, sid, prev string, noReturn bool) string {
+	now := time.Now().UTC()
+	what := map[string]string{"refund": "refund", "order": "new order", "replacement": "replacement"}[kind]
+	tk := model.Ticket{ID: fmt.Sprintf("T%s%d", o.ID[1:], now.UnixNano()%10000), Kind: "approval", Status: "waiting", CustomerID: o.CustomerID, SessionID: sid,
+		Summary: fmt.Sprintf("Approve %s $%.2f for %s (%s). Customer said: %s", what, amount, o.ID, why, reason), CreatedAt: now}
+	a := model.Approval{ID: fmt.Sprintf("AP-%s%d", o.ID[1:], now.UnixNano()%10000), Kind: kind, NoReturn: noReturn, OrderID: o.ID, CustomerID: o.CustomerID,
+		SessionID: sid, Amount: amount, Reason: reason, Why: why, PrevStatus: prev, Status: "pending", TicketID: tk.ID, CreatedAt: now}
+	tx.PutTicket(tk)
+	tx.PutApproval(a)
+	return tk.ID
+}
+
+func issueRefund(tx *store.Txn, o model.Order, reason string) model.Refund {
+	o.Status = "refunded"
+	rf := model.Refund{ID: "RF-" + o.ID[1:], OrderID: o.ID, CustomerID: o.CustomerID, Amount: o.Total, Reason: reason, CreatedAt: time.Now().UTC()}
+	tx.PutOrder(o)
+	tx.PutRefund(rf)
+	return rf
+}
+
+func (t *Tools) inStock(tx *store.Txn, o model.Order) bool {
+	need := map[string]int{}
+	for _, it := range o.Items {
+		need[it]++
+	}
+	for id, n := range need {
+		if p, ok := tx.Product(id); !ok || p.Stock < n {
+			return false
+		}
+	}
+	return true
+}
+
+func (t *Tools) takeStock(tx *store.Txn, items []string) map[string]int {
+	return t.moveStock(tx, items, -1)
+}
+func (t *Tools) restock(tx *store.Txn, o model.Order) map[string]int {
+	if o.ReplacementFor == "" && o.Payment == "" { // seed orders predate stock tracking
+		return nil
+	}
+	return t.moveStock(tx, o.Items, +1)
+}
+func (t *Tools) moveStock(tx *store.Txn, items []string, sign int) map[string]int {
+	out := map[string]int{}
+	for _, it := range items {
+		if p, ok := tx.Product(it); ok {
+			p.Stock += sign
+			if p.Stock < 0 {
+				p.Stock = 0
+			}
+			tx.PutProduct(p)
+			out[it] = p.Stock
+		}
+	}
+	return out
+}
+func (t *Tools) mirrorStock(m map[string]int) {
+	for id, n := range m {
+		t.R.SetStock(id, n)
+	}
+}
+
+func ageDays(o model.Order) int {
+	if o.DeliveredOn == "" {
+		return -1
+	}
+	d, _ := time.Parse("2006-01-02", o.DeliveredOn)
+	return int(time.Since(d).Hours() / 24)
+}
+func rma(oid string) string { return fmt.Sprintf("RMA-%s-%s", oid[1:], time.Now().Format("0102")) }
+func today() string         { return time.Now().Format("2006-01-02") }
+
+// placeOrder: confirm item, quantity, total and payment; check stock under the lock;
+// hold big or unusually frequent orders for a teammate (fraud guardrail).
+func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) ToolResult {
+	if !ProductRe.MatchString(pid) {
+		return ToolResult{Message: "Which product would you like to order? Tell me its ID (like P1020) or search for it first."}
+	}
+	maxQty, over, perDay, _ := t.limits()
+	if qty < 1 || qty > maxQty {
+		return ToolResult{Message: fmt.Sprintf("You can order 1 to %d of an item at a time.", maxQty), Guardrail: "quantity_limit"}
+	}
+	var res ToolResult
+	var stock map[string]int
+	var cat string
+	err := t.S.Tx(func(tx *store.Txn) error {
+		p, ok := tx.Product(pid)
+		if !ok {
+			res = ToolResult{Message: "I couldn't find product " + pid + "."}
+			return nil
+		}
+		cat = p.Category
+		c := t.card(pid, nil)
+		c.Stock = p.Stock
+		res.Products = []Card{c}
+		if p.Stock < qty {
+			if p.Stock == 0 {
+				res.Message = fmt.Sprintf("Sorry, %s (%s) is out of stock right now.", p.Name, pid)
+			} else {
+				res.Message = fmt.Sprintf("Sorry, only %d of %s (%s) left in stock.", p.Stock, p.Name, pid)
+			}
+			res.Guardrail = "out_of_stock"
+			return nil
+		}
+		sub := p.Price * float64(qty)
+		ship := 0.0
+		if sub < 50 {
+			ship = 5.99
+		}
+		total := math.Round((sub+ship)*100) / 100
+		why, g := "", ""
+		recent, dup := 0, ""
+		for _, o := range tx.OrdersFor(cid) {
+			if o.Payment != "" && o.ReplacementFor == "" && o.PlacedOn == today() && o.Status != "cancelled" {
+				recent++
+				if len(o.Items) > 0 && o.Items[0] == pid {
+					dup = o.ID
+				}
+			}
+		}
+		switch {
+		case total > over:
+			why, g = fmt.Sprintf("orders over $%.0f get a quick teammate review", over), "order_review_amount"
+		case recent >= perDay:
+			why, g = fmt.Sprintf("more than %d orders in a day get a quick teammate review", perDay), "order_velocity"
+		}
+		shipTxt := "free shipping"
+		if ship > 0 {
+			shipTxt = fmt.Sprintf("$%.2f shipping", ship)
+		}
+		res.OK = true
+		if !commit {
+			res.NeedsConfirm = true
+			res.Message = fmt.Sprintf("order %d × %s (%s) from %s: $%.2f + %s = $%.2f, charged to your card on file ending 4242 (demo), arriving in 3-5 business days",
+				qty, p.Name, pid, seed.SellerFor(p.Category), sub, shipTxt, total)
+			if why != "" {
+				res.Message += ". Because " + why + ", it ships after that review and you're only charged once it's approved"
+			}
+			if dup != "" {
+				res.Message += fmt.Sprintf(". Heads-up: you already ordered this today (%s)", dup)
+				if d, ok := tx.Order(dup); ok {
+					res.Orders = []*OrderView{t.view(d)}
+				}
+			}
+			return nil
+		}
+		id, err := tx.NextOrderID()
+		if err != nil {
+			return err
+		}
+		items := make([]string, qty)
+		for i := range items {
+			items[i] = pid
+		}
+		o := model.Order{ID: id, CustomerID: cid, Status: "placed", PlacedOn: today(), Items: items, Total: total,
+			Shipping: ship, Payment: "card ending 4242 (demo)"}
+		if why != "" {
+			o.Status = "on_hold"
+		}
+		stock = t.takeStock(tx, items)
+		tx.PutOrder(o)
+		res.Order = t.view(o)
+		res.Products = nil
+		if why != "" {
+			tk := t.hold(tx, o, "order", total, why, "new order", sid, "placed", false)
+			res.Escalated, res.Guardrail = true, g
+			res.Message = fmt.Sprintf("Order %s is created and waiting for a quick teammate review because %s (ticket %s). You'll only be charged $%.2f once it's approved.", id, why, tk, total)
+		} else {
+			res.Committed = true
+			res.Message = fmt.Sprintf("Order %s is placed: %d × %s, $%.2f total. It ships from %s and arrives in 3-5 business days. You can cancel it any time before it ships.",
+				id, qty, p.Name, total, seed.SellerFor(p.Category))
+		}
+		return nil
+	})
+	if err != nil {
+		return ToolResult{Message: "Sorry, I couldn't place that order. You weren't charged. Please try again."}
+	}
+	t.mirrorStock(stock)
+	if res.Guardrail == "out_of_stock" { // suggest in-stock alternatives in the same category
+		hits, _, _ := t.R.SearchProducts(search.ProductQuery{Query: cat})
+		for _, h := range hits {
+			if c := t.card(h.ID, nil); c.ID != pid && c.Stock > 0 && c.Category == cat && len(res.Choices) < 3 {
+				res.Products = append(res.Products, c)
+				res.Choices = append(res.Choices, Choice{"Order " + c.Name, "order " + c.ID})
+			}
+		}
+	}
+	return res
+}
+
+// ChooseProduct asks which of the products just shown the customer means by "order this".
+func (t *Tools) ChooseProduct(ids []string) ToolResult {
+	res := ToolResult{OK: true, Message: "Which one would you like to order?"}
+	for _, id := range ids {
+		if len(res.Choices) == 4 {
+			break
+		}
+		c := t.card(id, nil)
+		res.Products = append(res.Products, c)
+		res.Choices = append(res.Choices, Choice{fmt.Sprintf("%s · $%.0f", c.Name, c.Price), "order " + c.ID})
+	}
+	return res
+}
+
+// complaint logs a complaint and loops in a human. Product faults on a recent
+// delivery get self-service options first (replacement is usually the happiest fix).
+func (t *Tools) complaint(oid, about, summary, cid, sid string) ToolResult {
+	var o model.Order
+	var v *OrderView
+	if OrderRe.MatchString(oid) {
+		got, ok := t.S.Order(oid)
+		if !ok || got.CustomerID != cid {
+			return ToolResult{Message: fmt.Sprintf("I couldn't find order %s on your account.", oid)}
+		}
+		o, v = got, t.view(got)
+	}
+	about = strings.ToLower(about)
+	if about == "" {
+		about = "other"
+	}
+	if about == "product" && v != nil && o.Status == "delivered" && ageDays(o) <= t.ReturnWindow {
+		return ToolResult{OK: true, Order: v, Message: fmt.Sprintf("I'm sorry %s isn't right. I can send a free replacement, start a return for a refund, or bring in a teammate.", o.ID),
+			Choices: []Choice{{"Send a replacement", "replace " + o.ID}, {"Return for a refund", "return " + o.ID}, {"Talk to a person", "talk to a person"}}}
+	}
+	seller := ""
+	if v != nil && len(v.ItemCards) > 0 {
+		seller = v.ItemCards[0].Seller
+	}
+	head := map[string]string{"seller": "Seller complaint", "delivery": "Delivery issue", "product": "Product issue"}[about]
+	if head == "" {
+		head = "Complaint"
+	}
+	line := head
+	if o.ID != "" {
+		line += " · " + o.ID
+	}
+	if seller != "" {
+		line += " · " + seller
+	}
+	tk, err := t.openLive(cid, sid, line+": "+summary, strings.ToLower(strings.ReplaceAll(head, " ", "_")))
+	if err != nil {
+		return ToolResult{Message: "Sorry, I couldn't reach the support queue just now. Please try again in a moment."}
+	}
+	about2 := "this"
+	if seller != "" && about == "seller" {
+		about2 = seller
+	}
+	msg := fmt.Sprintf("I'm sorry about that. I've logged it (ticket %s) and I'm connecting you with a teammate now; they'll see our conversation and follow up on %s.", tk.ID, about2)
+	if about == "seller" {
+		msg += " Sellers with repeated complaints are reviewed by our marketplace team."
+	}
+	return ToolResult{OK: true, Ticket: &tk, Order: v, Message: msg, Guardrail: "complaint_to_human"}
+}
+
+// openLive queues the conversation for a human (idempotent per conversation).
+func (t *Tools) openLive(cid, sid, summary, topic string) (model.Ticket, error) {
+	if open, ok := t.S.OpenLiveTicket(sid); ok {
+		return open, nil
+	}
+	tk := model.Ticket{ID: fmt.Sprintf("T%d", time.Now().UnixNano()%1e8), Kind: "live", Topic: topic, CustomerID: cid, SessionID: sid,
+		Summary: summary, Status: "waiting", CreatedAt: time.Now().UTC()}
+	return tk, t.S.Tx(func(tx *store.Txn) error { tx.PutTicket(tk); return nil })
+}
+
+// listOrders answers "what did I order / what hasn't arrived / what's pending".
+func (t *Tools) listOrders(cid, filter string) ToolResult {
+	mine := t.S.OrdersFor(cid)
+	if len(mine) == 0 {
+		return ToolResult{OK: true, Message: "I don't see any orders on your account yet."}
+	}
+	group := func(s string) string {
+		switch s {
+		case "placed", "on_hold":
+			return "not shipped yet"
+		case "shipped":
+			return "on the way"
+		case "delivered":
+			return "delivered"
+		case "return_requested", "return_received", "refund_pending_approval", "replacement_requested", "return_pending_approval":
+			return "return or replacement in progress"
+		}
+		return strings.ReplaceAll(s, "_", " ")
+	}
+	match := func(s string) bool {
+		g := group(s)
+		switch filter {
+		case "open":
+			return g == "not shipped yet" || g == "on the way" || g == "return or replacement in progress"
+		case "not_delivered":
+			return g == "not shipped yet" || g == "on the way"
+		case "delivered":
+			return g == "delivered"
+		case "returns":
+			return g == "return or replacement in progress" || s == "refunded"
+		}
+		return true
+	}
+	counts, order := map[string]int{}, []string{}
+	res := ToolResult{OK: true}
+	for i := len(mine) - 1; i >= 0; i-- {
+		g := group(mine[i].Status)
+		if counts[g] == 0 {
+			order = append(order, g)
+		}
+		counts[g]++
+		if match(mine[i].Status) && len(res.Orders) < 8 {
+			res.Orders = append(res.Orders, t.view(mine[i]))
+		}
+	}
+	var parts []string
+	for _, g := range []string{"not shipped yet", "on the way", "delivered", "return or replacement in progress", "refunded", "cancelled"} {
+		if counts[g] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[g], g))
+		}
+	}
+	for _, g := range order { // any other status
+		if !contains([]string{"not shipped yet", "on the way", "delivered", "return or replacement in progress", "refunded", "cancelled"}, g) {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[g], g))
+		}
+	}
+	res.Message = fmt.Sprintf("You have %d orders: %s.", len(mine), strings.Join(parts, ", "))
+	if len(res.Orders) == 0 {
+		res.Message += map[string]string{"open": " Nothing is in progress right now.", "not_delivered": " Everything you ordered has been delivered.",
+			"delivered": " None are delivered yet.", "returns": " No returns or refunds in progress."}[filter]
+	}
 	return res
 }
 
@@ -372,24 +956,23 @@ func (t *Tools) chooseOrder(action, cid string) ToolResult {
 	if strings.HasPrefix(cid, "G-") {
 		return ToolResult{Message: "Please sign in with your MyFlipKart.com account to view or change orders.", Guardrail: "guest_blocked"}
 	}
-	verb := map[string]string{"cancel_order": "cancel", "return_order": "return", "request_refund": "refund"}[action]
+	verb := map[string]string{"cancel_order": "cancel", "return_order": "return", "request_refund": "refund", "replace_order": "replace"}[action]
 	res := ToolResult{OK: true}
 	mine := t.S.OrdersFor(cid)
 	for i := len(mine) - 1; i >= 0; i-- {
 		o := mine[i]
-		age := 0
-		if o.DeliveredOn != "" {
-			d, _ := time.Parse("2006-01-02", o.DeliveredOn)
-			age = int(time.Since(d).Hours() / 24)
-		}
+		age := ageDays(o)
 		ok := false
 		switch action {
 		case "cancel_order":
-			ok = o.Status == "placed"
+			ok = o.Status == "placed" || o.Status == "on_hold"
 		case "return_order":
 			ok = o.Status == "delivered" && age <= t.ReturnWindow
+		case "replace_order":
+			ok = o.Status == "delivered" && age <= t.ReturnWindow && o.ReplacementFor == ""
 		case "request_refund":
-			ok = (o.Status == "delivered" && age <= t.ReturnWindow) || o.Status == "return_requested"
+			ok = (o.Status == "delivered" && age <= t.ReturnWindow) || o.Status == "return_received" ||
+				(o.Status == "return_requested" && !o.RefundOnReceipt)
 		}
 		if !ok {
 			continue
@@ -405,16 +988,59 @@ func (t *Tools) chooseOrder(action, cid string) ToolResult {
 	if len(res.Choices) == 0 {
 		res.OK = false
 		res.Message = fmt.Sprintf("I don't see any orders that can be %s right now. Say \"my orders\" to see them all.",
-			map[string]string{"cancel": "cancelled (only orders that haven't shipped)", "return": "returned (delivered in the last 30 days)", "refund": "refunded"}[verb])
+			map[string]string{"cancel": "cancelled (only orders that haven't shipped)", "return": "returned (delivered in the last 30 days)",
+				"refund": "refunded (items have to be returned first)", "replace": "replaced (delivered in the last 30 days)"}[verb])
 		return res
 	}
 	res.Message = fmt.Sprintf("Which order would you like to %s?", verb)
 	return res
 }
 
-// DecideApproval is the human agent's action on a held refund (admin page).
+// ReceiveReturn is the warehouse scan of a returned item (admin console / courier
+// webhook). If the customer asked for a refund, it is released here, under the
+// same guardrails. Returns a customer-facing update.
+func (t *Tools) ReceiveReturn(oid, by string) (string, error) {
+	msg := ""
+	err := t.S.Tx(func(tx *store.Txn) error {
+		o, ok := tx.Order(oid)
+		if !ok {
+			return fmt.Errorf("no order %s", oid)
+		}
+		if o.Status != "return_requested" && o.Status != "replacement_requested" {
+			return fmt.Errorf("order %s is %s, not awaiting a returned item", oid, o.Status)
+		}
+		if o.Status == "replacement_requested" { // original came back; nothing to pay out
+			msg = fmt.Sprintf("We received the original item for %s. Thanks for sending it back!", oid)
+			return nil
+		}
+		o.Status = "return_received"
+		tx.PutOrder(o)
+		msg = fmt.Sprintf("We received your returned item for %s.", oid)
+		if !o.RefundOnReceipt {
+			return nil
+		}
+		if _, waiting := tx.PendingApprovalFor(oid); waiting {
+			msg += " Your refund is with a teammate for approval."
+			return nil
+		}
+		if why, _ := t.refundGuard(tx, o); why != "" {
+			o.Status = "refund_pending_approval"
+			tx.PutOrder(o)
+			t.hold(tx, o, "refund", o.Total, why, "return received", "", "return_received", false)
+			msg += " Your refund is with a teammate for approval because " + why + "."
+			return nil
+		}
+		rf := issueRefund(tx, o, "return received ("+by+")")
+		msg += fmt.Sprintf(" $%.2f is refunded (refund %s, 5-7 business days).", rf.Amount, rf.ID)
+		return nil
+	})
+	return msg, err
+}
+
+// DecideApproval is the human agent's action on held work (admin page / teammate).
 func (t *Tools) DecideApproval(id string, approve bool, by string) (model.Approval, error) {
 	var out model.Approval
+	var stock map[string]int
 	err := t.S.Tx(func(tx *store.Txn) error {
 		a, ok := tx.Approval(id)
 		if !ok {
@@ -425,18 +1051,47 @@ func (t *Tools) DecideApproval(id string, approve bool, by string) (model.Approv
 		}
 		o, _ := tx.Order(a.OrderID)
 		a.DecidedBy, a.DecidedAt = by, time.Now().UTC()
-		if approve {
-			a.Status = "approved"
-			if o.RMA == "" {
-				o.RMA = fmt.Sprintf("RMA-%s-%s", o.ID[1:], time.Now().Format("0102"))
+		switch a.Kind {
+		case "order", "replacement": // a held order: ship it, or cancel it and put the stock back
+			if approve {
+				a.Status, o.Status = "approved", "placed"
+			} else {
+				a.Status, o.Status = "rejected", "cancelled"
+				stock = t.restock(tx, o)
+				if orig, ok := tx.Order(o.ReplacementFor); ok && a.Kind == "replacement" {
+					orig.Status, orig.ReplacedBy, orig.RMA = "delivered", "", ""
+					tx.PutOrder(orig)
+				}
 			}
-			o.Status = "refunded"
-			tx.PutRefund(model.Refund{ID: "RF-" + o.ID[1:], OrderID: o.ID, CustomerID: o.CustomerID, Amount: a.Amount,
-				Reason: a.Reason + " (approved by " + by + ")", CreatedAt: time.Now().UTC()})
-		} else {
-			a.Status, o.Status = "rejected", a.PrevStatus
+			tx.PutOrder(o)
+		case "return": // approve: issue the RMA; the refund is pre-approved and released on receipt
+			if approve {
+				a.Status = "approved"
+				o.Status, o.RMA, o.RefundApproved = "return_requested", rma(o.ID), true
+			} else {
+				a.Status = "rejected"
+				o.Status, o.RefundOnReceipt, o.ReturnStartedAt = a.PrevStatus, false, time.Time{}
+			}
+			tx.PutOrder(o)
+		default: // refund
+			if approve {
+				a.Status = "approved"
+				if a.NoReturn || o.Status == "return_received" || o.Status == "refund_pending_approval" {
+					issueRefund(tx, o, a.Reason+" (approved by "+by+")")
+					a.Refunded = true
+				} else { // item still on its way back: refund releases on receipt
+					o.RefundApproved = true
+					tx.PutOrder(o)
+				}
+			} else {
+				a.Status = "rejected"
+				if o.Status == "refund_pending_approval" {
+					o.Status = a.PrevStatus
+				}
+				o.RefundOnReceipt = false
+				tx.PutOrder(o)
+			}
 		}
-		tx.PutOrder(o)
 		tx.PutApproval(a)
 		if tk, ok := t.S.TicketLocked(a.TicketID); ok { // close the back-office ticket
 			tk.Status, tk.AgentName, tk.ClosedAt = "closed", by, time.Now().UTC()
@@ -445,7 +1100,25 @@ func (t *Tools) DecideApproval(id string, approve bool, by string) (model.Approv
 		out = a
 		return nil
 	})
+	t.mirrorStock(stock)
 	return out, err
+}
+
+// ApprovalUpdate is the message the customer sees when a teammate decides.
+func ApprovalUpdate(a model.Approval, by string) string {
+	switch {
+	case a.Status == "rejected":
+		return fmt.Sprintf("Update from %s: we couldn't approve the request for %s. A teammate will email you the details.", by, a.OrderID)
+	case a.Kind == "return":
+		return fmt.Sprintf("Update from %s: your return for %s was approved. A prepaid label is in your email, and your $%.2f refund is released as soon as the item reaches us.", by, a.OrderID, a.Amount)
+	case a.Kind == "order":
+		return fmt.Sprintf("Update from %s: your order %s was approved and will ship soon. $%.2f is charged to your card on file.", by, a.OrderID, a.Amount)
+	case a.Kind == "replacement":
+		return fmt.Sprintf("Update from %s: your replacement order %s was approved and ships in 1-2 business days.", by, a.OrderID)
+	case a.Refunded:
+		return fmt.Sprintf("Update from %s: your $%.2f refund for %s was approved. It will reach your original payment method in 5-7 business days.", by, a.Amount, a.OrderID)
+	}
+	return fmt.Sprintf("Update from %s: your $%.2f refund for %s was approved. It's paid as soon as the returned item reaches us.", by, a.Amount, a.OrderID)
 }
 
 // ---------------- price parsing ----------------

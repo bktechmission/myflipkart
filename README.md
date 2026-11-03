@@ -26,9 +26,12 @@ Ask Sauby is the shopping assistant for **MyFlipKart.com**, a fictional store. I
    - **Reciprocal Rank Fusion** merges the two lists: `1/(60+rank₁) + 1/(60+rank₂)`.
    - A **reranker** re-scores the top 20 down to 5.
    - Price and category become metadata filters.
-6. **Act safely.** Order tools (track, cancel, return, refund) only ever see the session's own orders.
+6. **Act safely.** Order tools (track, list, buy, cancel, return, replace, refund, complain) only ever see the session's own orders.
    - Nothing changes until the customer says *yes*.
-   - Refunds over **$30** go to a person.
+   - **No refund without the item.** A refund is released only when the warehouse scans the returned item (or a teammate confirms it never arrived).
+   - Returns over **$30**, and any return beyond **3 in 30 days**, go to a person before a label is issued.
+   - A **replacement** is offered before a return. Orders over $1000, more than 3 orders a day, and replacements over $500 get a teammate review. Stock is checked under the lock, so the last unit is never sold twice.
+   - Seller complaints and missing items go straight to a person. Answering **No** to "Did this solve your issue?" connects a teammate immediately.
    - Each action is one transaction, re-checked under the lock, and one refund per order, ever.
 7. **Answer.** The LLM writes FAQ answers from the retrieved passages only. Money and order outcomes use fixed templates. Status lines stream first ("Checking refund eligibility…"), so the customer is never staring at silence.
 8. **Measure.** Every turn emits Prometheus metrics and one JSON log line. Logs and feedback feed the eval loop.
@@ -132,8 +135,12 @@ ollama pull qwen2.5:3b && ollama pull nomic-embed-text
 - "Headphones for long flights", then open **How I found this** to see BM25, vector, fused and rerank positions.
 - "Laptops between $500 and $1000"
 - "Where is my latest order?"
-- "I want a refund for O5009" (under $30: refunded after you confirm)
-- "I want a refund for O5008" (over $30: goes to a teammate)
+- "Tell me about P1020", then "place order this"
+- "What hasn't been delivered yet?"
+- "Return O5009" (under $30: label now, refund when the item arrives — or tap **Send a free replacement instead**)
+- "I want a refund for O5008" (over $30: the return goes to a teammate first)
+- Admin → Approvals → **Returns on the way back** → *Mark received* to simulate the warehouse scan that releases a refund.
+- "The seller sent me a fake item on O5005" (complaint: a teammate joins)
 - "Talk to a person". Then open Admin → Live chats in another window and join, or wait for the Demo teammate.
 - Sign in as Meera and ask for order O5001. You won't see it: it's Aarav's.
 

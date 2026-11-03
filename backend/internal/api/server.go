@@ -143,6 +143,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/admin/reset-orders", s.withAuth(s.resetOrders, true))
 	m.HandleFunc("GET /api/admin/approvals", s.withAuth(s.approvals, true))
 	m.HandleFunc("POST /api/admin/approvals/{id}", s.withAuth(s.decideApproval, true))
+	m.HandleFunc("POST /api/admin/orders/{id}/receive", s.withAuth(s.receiveReturn, true))
 	m.HandleFunc("GET /api/admin/knowledge", s.withAuth(s.knowledge, true))
 	m.HandleFunc("PUT /api/admin/policies/{id}", s.withAuth(s.savePolicy, true))
 	m.HandleFunc("PUT /api/admin/products/{id}", s.withAuth(s.saveProduct, true))
@@ -444,7 +445,20 @@ func (s *Server) feedback(w http.ResponseWriter, r *http.Request, sess *auth.Ses
 	}
 	s.store.AddFeedback(model.Feedback{TS: time.Now().UTC(), CustomerID: sess.CID, SessionID: in.SID, Helpful: in.Helpful,
 		Outcome: in.Outcome, Comment: strings.TrimSpace(in.Comment), Variant: s.agentFor(in.SID).Variant})
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	if in.Helpful || in.Comment != "" {
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	// "No, this didn't solve it": don't make the customer ask twice, bring in a person now.
+	res := s.tools.Run("handoff", map[string]any{"summary": "Customer said the issue was not resolved (" + in.Outcome + ")"}, sess.CID, in.SID, false)
+	if res.OK && res.Ticket != nil {
+		s.store.AppendMessage(sess.CID, in.SID, model.Message{TS: time.Now().UTC(), Role: "system",
+			Content: "Sorry this didn't solve it. Connecting you with a teammate now; they'll see this conversation."})
+		s.store.LogEvent(model.Event{TS: time.Now().UTC(), CustomerID: sess.CID, SessionID: in.SID, Query: "feedback: not resolved",
+			Tool: "handoff", Path: "handoff", OK: true, Status: 200, Source: "chat", Handoff: true, Variant: s.agentFor(in.SID).Variant,
+			Flags: []string{"unresolved_feedback"}})
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "live": res.OK && res.Ticket != nil, "message": res.Message})
 }
 
 // chat streams Server-Sent Events: "status" events while work happens (so the

@@ -6,6 +6,7 @@
 package api
 
 import (
+	"asksauby/internal/agent"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -29,7 +30,11 @@ func (s *Server) approvals(w http.ResponseWriter, r *http.Request, _ *auth.Sessi
 	if out == nil {
 		out = []model.Approval{}
 	}
-	writeJSON(w, 200, map[string]any{"approvals": out, "tickets": s.store.Tickets(), "limit": s.cfg.AutoRefundLimit})
+	ret := s.store.AwaitingReturn()
+	if ret == nil {
+		ret = []model.Order{}
+	}
+	writeJSON(w, 200, map[string]any{"approvals": out, "tickets": s.store.Tickets(), "limit": s.cfg.AutoRefundLimit, "returns": ret})
 }
 
 func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
@@ -44,16 +49,31 @@ func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, sess *au
 		return
 	}
 	if a.SessionID != "" { // tell the customer in their chat
-		msg := fmt.Sprintf("Update from %s: your $%.2f refund for %s was approved. It will reach your original payment method in 5-7 business days.", sess.Name, a.Amount, a.OrderID)
-		if a.Status == "rejected" {
-			msg = fmt.Sprintf("Update from %s: we couldn't approve the refund for %s. Reply here and Sauby can connect you with a teammate.", sess.Name, a.OrderID)
-		}
-		s.store.AppendMessage(a.CustomerID, a.SessionID, model.Message{TS: time.Now().UTC(), Role: "agent", Content: msg,
+		s.store.AppendMessage(a.CustomerID, a.SessionID, model.Message{TS: time.Now().UTC(), Role: "agent", Content: agent.ApprovalUpdate(a, sess.Name),
 			Meta: map[string]any{"agent_name": sess.Name, "agent_kind": "human", "ask_feedback": "escalated_decided"}})
 	}
 	s.store.LogEvent(model.Event{TS: time.Now().UTC(), CustomerID: a.CustomerID, Query: "approval " + a.ID + " " + a.Status + " by " + sess.Email,
 		Tool: "human_approval", Path: "transaction", OK: true, Status: 200, Source: "admin", Resolved: a.Status == "approved"})
 	writeJSON(w, 200, a)
+}
+
+// receiveReturn is the warehouse scan of a returned item. Refunds waiting on the
+// item are released here (under the same guardrails), never before.
+func (s *Server) receiveReturn(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
+	oid := r.PathValue("id")
+	msg, err := s.tools.ReceiveReturn(oid, sess.Email)
+	if err != nil {
+		writeJSON(w, 409, map[string]string{"error": err.Error()})
+		return
+	}
+	if o, ok := s.store.Order(oid); ok { // tell the customer in their most recent conversation
+		if ss := s.store.Sessions(o.CustomerID); len(ss) > 0 {
+			s.store.AppendMessage(o.CustomerID, ss[0].SID, model.Message{TS: time.Now().UTC(), Role: "system", Content: msg})
+		}
+	}
+	s.store.LogEvent(model.Event{TS: time.Now().UTC(), Query: "return received " + oid + " by " + sess.Email,
+		Tool: "warehouse_receive", Path: "transaction", OK: true, Status: 200, Source: "admin"})
+	writeJSON(w, 200, map[string]string{"message": msg})
 }
 
 // ---------------- knowledge base: edit -> re-index live ----------------

@@ -29,15 +29,26 @@ type User struct {
 }
 
 type Order struct {
-	ID          string    `json:"id"`
-	CustomerID  string    `json:"customer_id"`
-	Status      string    `json:"status"` // placed shipped delivered cancelled return_requested refunded
-	PlacedOn    string    `json:"placed_on"`
-	DeliveredOn string    `json:"delivered_on,omitempty"`
-	Items       []string  `json:"items"`
-	Total       float64   `json:"total"`
-	RMA         string    `json:"rma,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID         string `json:"id"`
+	CustomerID string `json:"customer_id"`
+	// Lifecycle: placed -> shipped -> delivered -> (return_requested -> return_received -> refunded)
+	// or (replacement_requested, with a new $0 replacement order). on_hold = waiting for a teammate.
+	Status      string   `json:"status"`
+	PlacedOn    string   `json:"placed_on"`
+	DeliveredOn string   `json:"delivered_on,omitempty"`
+	Items       []string `json:"items"`
+	Total       float64  `json:"total"`
+	RMA         string   `json:"rma,omitempty"`
+	// RefundOnReceipt: the customer asked for a refund; it is released only when the
+	// returned item reaches the warehouse (we never refund an item that wasn't returned).
+	RefundOnReceipt bool      `json:"refund_on_receipt,omitempty"`
+	RefundApproved  bool      `json:"refund_approved,omitempty"`   // a teammate pre-approved the refund (over the limit)
+	ReturnStartedAt time.Time `json:"return_started_at,omitempty"` // returns-per-month guardrail
+	ReplacementFor  string    `json:"replacement_for,omitempty"`   // this order replaces that one
+	ReplacedBy      string    `json:"replaced_by,omitempty"`       // the replacement order sent for this one
+	Shipping        float64   `json:"shipping,omitempty"`
+	Payment         string    `json:"payment,omitempty"` // e.g. "card ending 4242" (demo)
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type Refund struct {
@@ -53,6 +64,9 @@ type Refund struct {
 // or velocity limit hit). Nothing moves until an admin approves it.
 type Approval struct {
 	ID         string    `json:"id"`
+	Kind       string    `json:"kind,omitempty"`      // "" or refund | return | order (large/fast orders) | replacement
+	NoReturn   bool      `json:"no_return,omitempty"` // item reported not received: refund on approval
+	Refunded   bool      `json:"refunded,omitempty"`  // money actually moved when decided
 	OrderID    string    `json:"order_id"`
 	CustomerID string    `json:"customer_id"`
 	SessionID  string    `json:"session_id,omitempty"` // conversation to notify when decided
@@ -82,7 +96,8 @@ type PolicyDoc struct {
 // back-office task (e.g. approve a refund over the limit).
 type Ticket struct {
 	ID         string    `json:"id"`
-	Kind       string    `json:"kind"` // live | approval
+	Kind       string    `json:"kind"`            // live | approval
+	Topic      string    `json:"topic,omitempty"` // e.g. seller_complaint, delivery_issue
 	CustomerID string    `json:"customer_id"`
 	SessionID  string    `json:"session_id"`
 	Summary    string    `json:"summary"`

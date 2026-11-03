@@ -26,6 +26,26 @@ let liveTimer = 0;
 let products: Product[] = [];
 
 const stream = () => $("#stream");
+
+// ---------------- stay pinned to the newest message ----------------
+// Like a chat app: while you're at the bottom, new text, product cards and late-loading
+// images keep the view at the bottom. Scroll up to read and it stops following;
+// the arrow button (or sending a message) jumps back down.
+let pinned = true;
+const nearBottom = () => { const s = stream(); return s.scrollHeight - s.scrollTop - s.clientHeight < 80; };
+function toBottom(force = false): void {
+  if (force) pinned = true;
+  if (pinned) { const s = stream(); s.scrollTop = s.scrollHeight; }
+  $("#jump").classList.toggle("hide", pinned);
+}
+function watchScroll(): void {
+  const s = stream();
+  s.addEventListener("scroll", () => { pinned = nearBottom(); $("#jump").classList.toggle("hide", pinned); }, { passive: true });
+  new MutationObserver(() => toBottom()).observe(s, { childList: true, subtree: true, characterData: true });
+  s.addEventListener("load", () => toBottom(), true); // images grow the page after they load
+  new ResizeObserver(() => toBottom()).observe(s);   // window or composer resize
+  $("#jump").addEventListener("click", () => { toBottom(true); s.scrollTo({ top: s.scrollHeight, behavior: "smooth" }); });
+}
 const first = (n: string) => (n || "there").split(" ")[0];
 
 // ---------------- boot ----------------
@@ -33,6 +53,7 @@ const first = (n: string) => (n || "there").split(" ")[0];
 async function init(): Promise<void> {
   paintIcons();
   themeButton($("#theme"));
+  watchScroll();
   me = await api<Me>("/api/me");
   $("#whoName").textContent = me.name || "Guest";
   $("#avatar").textContent = (me.name || "G")[0];
@@ -85,6 +106,7 @@ async function openSession(id: string): Promise<void> {
   stream().innerHTML = "";
   for (const m of list) renderMessage(m, true);
   cursor = list.length;
+  toBottom(true);
   show("chat");
   pollLive(); // pick up a handoff that's still open
 }
@@ -102,7 +124,7 @@ function renderMessage(m: any, history: boolean): void {
     stream().appendChild(d);
     if (meta.ask_feedback && !history) addTurn("bot", feedbackCard(meta.ask_feedback));
   }
-  stream().scrollTop = stream().scrollHeight;
+  toBottom();
 }
 
 function addTurn(role: "user" | "bot", html: string): HTMLElement {
@@ -113,7 +135,7 @@ function addTurn(role: "user" | "bot", html: string): HTMLElement {
     ? `<span class="mark sm" aria-hidden="true">S</span><div class="bubble"><div class="who">Sauby</div>${html}</div>`
     : `<div class="bubble">${html}</div>`;
   stream().appendChild(d);
-  stream().scrollTop = stream().scrollHeight;
+  toBottom();
   return d;
 }
 
@@ -126,7 +148,7 @@ function addAgentTurn(text: string, name: string, kind: string, askFeedback = ""
     <div class="who">${esc(name)} ${kind === "simulated" ? '<span class="tag" title="Simulated teammate in this demo">Demo</span>' : ""}</div>
     ${md(text)}${askFeedback ? feedbackCard(askFeedback) : ""}</div>`;
   stream().appendChild(d);
-  stream().scrollTop = stream().scrollHeight;
+  toBottom();
 }
 
 // ---------------- Sauby's answers ----------------
@@ -184,14 +206,17 @@ function feedbackCard(outcome: string): string {
     : outcome === "escalated_decided" ? "Did this resolve your issue?"
     : "Did this solve your issue?";
   return `<div class="feedback" data-outcome="${esc(outcome)}"><div>${q}</div>
-    <div class="actions"><button class="btn ghost sm" data-fb="1">${icon("up")}Yes</button><button class="btn ghost sm" data-fb="0">${icon("down")}No</button></div>
-    <div class="fbmore hide"><textarea placeholder="What should we do better? (optional)"></textarea>
-    <div class="actions"><button class="btn sm" data-fbsend>Send</button></div></div></div>`;
+    <div class="actions"><button class="btn ghost sm" data-fb="1">${icon("up")}Yes</button><button class="btn ghost sm" data-fb="0">${icon("down")}No</button></div></div>`;
 }
 
 async function sendFeedback(card: HTMLElement, helpful: boolean, comment = ""): Promise<void> {
-  await api("/api/feedback", { method: "POST", body: JSON.stringify({ sid, helpful, outcome: card.dataset.outcome, comment }) });
-  card.innerHTML = `<span class="muted">Thanks for the feedback.</span>`;
+  const r = await api<any>("/api/feedback", { method: "POST", body: JSON.stringify({ sid, helpful, outcome: card.dataset.outcome, comment }) });
+  if (r.live) { // "No" connects a teammate straight away
+    card.innerHTML = `<span class="muted">Thanks for telling us. A teammate is joining.</span>`;
+    pollLive();
+    return;
+  }
+  card.innerHTML = `<span class="muted">${esc(helpful ? "Thanks for the feedback." : r.message || "Thanks for the feedback.")}</span>`;
 }
 
 async function send(text: string): Promise<void> {
@@ -200,6 +225,7 @@ async function send(text: string): Promise<void> {
   busy = true;
   show("chat");
   addTurn("user", esc(text));
+  toBottom(true); // sending always brings you back to the latest message
   $<HTMLTextAreaElement>("#q").value = "";
   const turn = addTurn("bot", `<div class="working"><span class="pulse"></span><span class="now">Reading your message</span></div><div class="steps"></div>`);
   const bubble = turn.querySelector(".bubble") as HTMLElement;
@@ -216,11 +242,11 @@ async function send(text: string): Promise<void> {
       }
       if (ev === "answer") {
         bubble.innerHTML = `<div class="who">Sauby</div>` + renderAnswer(data);
-        if (["cancel_order", "return_order", "request_refund"].includes(data.tool)) loadOrders();
-        if (data.tool === "handoff" && data.ok) pollLive();
+        if (["cancel_order", "return_order", "request_refund", "place_order", "replace_order"].includes(data.tool)) loadOrders();
+        if ((data.tool === "handoff" || data.tool === "file_complaint") && data.ok && data.result?.ticket) pollLive();
       }
       if (ev === "live") { turn.remove(); pollLive(); }
-      stream().scrollTop = stream().scrollHeight;
+      toBottom();
     });
     cursor += 2;
   } catch (e) {
@@ -253,7 +279,7 @@ async function pollLive(): Promise<void> {
       typing.innerHTML = `<span class="working" style="justify-content:center"><span class="pulse"></span>${esc(label)}</span>`;
       stream().appendChild(typing); // keep it last
     } else typing?.remove();
-    stream().scrollTop = stream().scrollHeight;
+    toBottom();
     if (st.mode !== "bot") liveTimer = window.setTimeout(pollLive, 1500);
   } catch { liveTimer = window.setTimeout(pollLive, 4000); }
 }
@@ -322,13 +348,8 @@ document.addEventListener("click", async (e) => {
   const fb = t.closest<HTMLElement>("[data-fb]");
   if (fb) {
     const card = fb.closest<HTMLElement>(".feedback")!;
-    if (fb.dataset.fb === "1") sendFeedback(card, true);
-    else { card.querySelector(".fbmore")!.classList.remove("hide"); fb.parentElement?.remove(); }
+    sendFeedback(card, fb.dataset.fb === "1");
     return;
-  }
-  if (t.closest("[data-fbsend]")) {
-    const card = t.closest<HTMLElement>(".feedback")!;
-    sendFeedback(card, false, (card.querySelector("textarea") as HTMLTextAreaElement).value);
   }
 });
 

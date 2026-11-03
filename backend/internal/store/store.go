@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -268,6 +270,60 @@ func (t *Txn) RefundsSince(cid string, since time.Time) int {
 	}
 	return n
 }
+
+// Product reads a product inside the transaction (stock is checked and decremented under the lock).
+func (t *Txn) Product(id string) (model.Product, bool) {
+	for i := len(t.recs) - 1; i >= 0; i-- {
+		if t.recs[i].Product != nil && t.recs[i].Product.ID == id {
+			return *t.recs[i].Product, true
+		}
+	}
+	p, ok := t.s.products[id]
+	return p, ok
+}
+func (t *Txn) PutProduct(p model.Product) { t.recs = append(t.recs, rec{Kind: "product", Product: &p}) }
+
+// OrdersFor lists a customer's orders as this transaction sees them.
+func (t *Txn) OrdersFor(cid string) []model.Order {
+	seen := map[string]bool{}
+	var out []model.Order
+	for i := len(t.recs) - 1; i >= 0; i-- {
+		if o := t.recs[i].Order; o != nil && o.CustomerID == cid && !seen[o.ID] {
+			seen[o.ID] = true
+			out = append(out, *o)
+		}
+	}
+	for id, o := range t.s.orders {
+		if o.CustomerID == cid && !seen[id] {
+			out = append(out, o)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// NextOrderID allocates the next order number (O + 4 digits) under the write lock.
+func (t *Txn) NextOrderID() (string, error) {
+	max := 5000
+	bump := func(id string) {
+		if n, err := strconv.Atoi(strings.TrimPrefix(id, "O")); err == nil && n > max {
+			max = n
+		}
+	}
+	for id := range t.s.orders {
+		bump(id)
+	}
+	for _, r := range t.recs {
+		if r.Order != nil {
+			bump(r.Order.ID)
+		}
+	}
+	if max >= 9999 {
+		return "", fmt.Errorf("order numbers exhausted")
+	}
+	return fmt.Sprintf("O%d", max+1), nil
+}
+
 func (t *Txn) PutOrder(o model.Order) {
 	o.UpdatedAt = time.Now().UTC()
 	t.recs = append(t.recs, rec{Kind: "order", Order: &o})
@@ -410,6 +466,20 @@ func (s *Store) OrdersFor(cid string) []model.Order {
 	var out []model.Order
 	for _, o := range s.orders {
 		if o.CustomerID == cid {
+			out = append(out, o)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// AwaitingReturn lists orders whose item is on its way back to the warehouse.
+func (s *Store) AwaitingReturn() []model.Order {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []model.Order
+	for _, o := range s.orders {
+		if o.Status == "return_requested" || (o.Status == "replacement_requested" && o.RMA != "") {
 			out = append(out, o)
 		}
 	}

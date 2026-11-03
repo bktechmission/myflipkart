@@ -22,7 +22,7 @@ and what the customer can do next.`
 // writeAnswer uses the LLM for FAQ-style answers; order/refund outcomes use
 // deterministic templates so the money path never depends on generation.
 func (a *Agent) writeAnswer(ctx context.Context, text string, r Route, res ToolResult) (string, string, int) {
-	if r.Tool == "chitchat" || pathOf(r.Tool) == "transaction" || r.Tool == "handoff" ||
+	if r.Tool == "chitchat" || pathOf(r.Tool) == "transaction" || r.Tool == "handoff" || r.Tool == "file_complaint" || len(res.Choices) > 0 ||
 		r.Router != "llm" || a.GW == nil {
 		return templateAnswer(r.Tool, r.Args, res, r.Reply), "template", 0
 	}
@@ -65,6 +65,8 @@ func templateAnswer(tool string, args map[string]any, res ToolResult, reply stri
 			return reply
 		}
 		return "Hi, I'm Sauby! I can find products, search by price, track, cancel or return your orders, process refunds, and answer policy questions."
+	case len(res.Choices) > 0 || tool == "place_order":
+		return res.Message
 	case len(res.Products) > 0:
 		head := "Here's what I found:"
 		if tool == "get_product" {
@@ -80,11 +82,9 @@ func templateAnswer(tool string, args map[string]any, res ToolResult, reply stri
 			fmt.Fprintf(&b, "\n- **%s** (%s) - $%.0f, %.1f stars: %s", p.Name, p.ID, p.Price, p.Rating, strings.Join(feats, ", "))
 		}
 		return b.String()
-	case len(res.Choices) > 0:
-		return res.Message
 	case tool == "list_orders" && len(res.Orders) > 0:
 		var b strings.Builder
-		b.WriteString("Here are your recent orders:")
+		b.WriteString(res.Message)
 		for _, o := range res.Orders {
 			name := ""
 			if len(o.ItemCards) > 0 {

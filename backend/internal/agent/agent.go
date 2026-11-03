@@ -34,6 +34,8 @@ type Agent struct {
 	mu      sync.Mutex
 	pending map[string]pendingAction // by session
 	focus   map[string]string        // by session: the order the conversation is about ("this order")
+	focusP  map[string]string        // by session: the product the conversation is about ("order this")
+	shown   map[string][]string      // by session: products in the last result list
 	history map[string][]llm.Message
 }
 
@@ -82,7 +84,8 @@ var (
 
 func New(t *Tools, s *store.Store, gw *llm.Gateway, mode, source string) *Agent {
 	return &Agent{Tools: t, Store: s, GW: gw, Mode: mode, Source: source,
-		pending: map[string]pendingAction{}, history: map[string][]llm.Message{}, focus: map[string]string{}}
+		pending: map[string]pendingAction{}, history: map[string][]llm.Message{}, focus: map[string]string{},
+		focusP: map[string]string{}, shown: map[string][]string{}}
 }
 
 func (a *Agent) router() Router {
@@ -102,11 +105,11 @@ func (a *Agent) Router() Router { return a.router() }
 
 func pathOf(tool string) string {
 	switch tool {
-	case "get_order", "list_orders", "cancel_order", "return_order", "request_refund":
+	case "get_order", "list_orders", "cancel_order", "return_order", "request_refund", "place_order", "replace_order":
 		return "transaction"
 	case "chitchat":
 		return "chitchat"
-	case "handoff":
+	case "handoff", "file_complaint":
 		return "handoff"
 	}
 	return "faq"
@@ -117,7 +120,8 @@ var progress = map[string]string{
 	"get_product": "Pulling up that product…", "policy_search": "Checking our policies…",
 	"get_order": "Looking up your order…", "list_orders": "Pulling up your orders…", "cancel_order": "Checking whether it can still be cancelled…",
 	"return_order": "Checking the return window…", "request_refund": "Checking refund eligibility…",
-	"handoff": "Connecting you with a teammate…",
+	"handoff": "Connecting you with a teammate…", "place_order": "Checking stock and price…",
+	"replace_order": "Checking the replacement window and stock…", "file_complaint": "Logging this for a teammate…",
 }
 
 // Handle runs one turn. emit receives progress messages for the "someone is
@@ -151,7 +155,8 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 		route = Route{Tool: pend.Tool, Args: pend.Args, Router: "confirm"}
 		resp.Trace.RouteMS = ms(t0)
 		say(map[string]string{"cancel_order": "Cancelling your order…", "return_order": "Creating your return…",
-			"request_refund": "Processing your refund… this can take a few seconds."}[pend.Tool])
+			"request_refund": "Processing your refund… this can take a few seconds.", "place_order": "Placing your order…",
+			"replace_order": "Creating your replacement…"}[pend.Tool])
 		t1 := time.Now()
 		resp.Result = a.Tools.Run(route.Tool, route.Args, cid, sid, true)
 		resp.Trace.ToolMS = ms(t1)
@@ -170,7 +175,8 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 			args["query"] = text
 		}
 		// "return this order": use the order the conversation is about
-		if route.Tool == "cancel_order" || route.Tool == "return_order" || route.Tool == "request_refund" || route.Tool == "get_order" {
+		if route.Tool == "cancel_order" || route.Tool == "return_order" || route.Tool == "request_refund" || route.Tool == "get_order" ||
+			route.Tool == "replace_order" || route.Tool == "file_complaint" {
 			if id, _ := args["order_id"].(string); !OrderRe.MatchString(id) && id != "LATEST" {
 				a.mu.Lock()
 				f := a.focus[sid]
@@ -180,9 +186,27 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 				}
 			}
 		}
+		// "order this": use the product the conversation is about, or ask which one was meant
+		var choose []string
+		if route.Tool == "place_order" {
+			if id, _ := args["product_id"].(string); !ProductRe.MatchString(id) {
+				a.mu.Lock()
+				f, shown := a.focusP[sid], a.shown[sid]
+				a.mu.Unlock()
+				if f != "" {
+					args["product_id"] = f
+				} else {
+					choose = shown
+				}
+			}
+		}
 		route.Args = args
 		t1 := time.Now()
-		resp.Result = a.Tools.Run(route.Tool, args, cid, sid, false)
+		if len(choose) > 0 && !strings.HasPrefix(cid, "G-") {
+			resp.Result = a.Tools.ChooseProduct(choose)
+		} else {
+			resp.Result = a.Tools.Run(route.Tool, args, cid, sid, false)
+		}
 		resp.Trace.ToolMS = ms(t1)
 		t2 := time.Now()
 		if resp.Result.NeedsConfirm {
@@ -205,6 +229,19 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 	}
 	if resp.Result.Order != nil && resp.Result.OK {
 		a.focus[sid] = resp.Result.Order.ID
+	}
+	if ps := resp.Result.Products; len(ps) > 0 && route.Tool != "place_order" { // what "this" refers to next
+		a.shown[sid] = nil
+		for _, p := range ps {
+			a.shown[sid] = append(a.shown[sid], p.ID)
+		}
+		a.focusP[sid] = ""
+		if len(ps) == 1 {
+			a.focusP[sid] = ps[0].ID
+		}
+	}
+	if id := ProductRe.FindString(text); id != "" {
+		a.focusP[sid] = strings.ToUpper(id)
 	}
 	a.mu.Unlock()
 	resp.Trace.Router, resp.Trace.Provider, resp.Trace.Model = route.Router, route.Provider, route.Model
@@ -278,7 +315,7 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 	a.Store.LogEvent(model.Event{TS: time.Now().UTC(), CustomerID: cid, SessionID: sid, Query: text, Tool: resp.Tool,
 		Path: resp.Trace.Path, Router: route.Router, Model: route.Model, OK: resp.OK, Status: 200, Error: route.Err,
 		NResults: n, LatencyMS: resp.Trace.LatencyMS, TTFTMS: ttft, Tokens: resp.Trace.Tokens, Source: a.Source,
-		Resolved: resp.Result.Committed, Handoff: resp.Tool == "handoff" && resp.OK,
+		Resolved: resp.Result.Committed, Handoff: (resp.Tool == "handoff" || resp.Tool == "file_complaint") && resp.OK && resp.Result.Ticket != nil,
 		Escalated: resp.Result.Escalated && !resp.NeedsConfirm, Variant: a.Variant, Flags: flags})
 	return resp
 }

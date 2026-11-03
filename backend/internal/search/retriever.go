@@ -107,6 +107,16 @@ func (r *Retriever) Product(id string) (model.Product, bool) {
 	return p, ok
 }
 
+// SetStock updates the displayed stock after an order (no re-index needed: stock isn't searched).
+func (r *Retriever) SetStock(id string, n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p, ok := r.Products[id]; ok {
+		p.Stock = n
+		r.Products[id] = p
+	}
+}
+
 func (r *Retriever) Chunk(id string) PolicyChunk {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

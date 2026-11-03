@@ -236,10 +236,25 @@ func (h *Hub) simGreet(t model.Ticket) {
 	greet := fmt.Sprintf("Hi %s, I'm %s from MyFlipKart support. I've read your chat with Sauby.", first(c.Customer.Name), first(t.AgentName))
 	if len(c.Approvals) > 0 { // a refund waiting for a human: the teammate reviews it
 		a := c.Approvals[0]
-		h.say(t, "agent", greet+fmt.Sprintf(" I can see your $%.2f refund for %s is waiting for approval. Let me review it.", a.Amount, a.OrderID), nil)
+		what := map[string]string{"order": "new order", "replacement": "replacement", "return": "return"}[a.Kind]
+		if what == "" {
+			what = "refund"
+		}
+		h.say(t, "agent", greet+fmt.Sprintf(" I can see your $%.2f %s for %s is waiting for approval. Let me review it.", a.Amount, what, a.OrderID), nil)
 		h.typeFor(t, 2500*time.Millisecond)
-		if _, err := h.Tools.DecideApproval(a.ID, true, t.AgentName+" (simulated)"); err == nil {
-			h.say(t, "agent", fmt.Sprintf("Done — I've approved it. $%.2f will be back on your original payment method in 5-7 business days. Is there anything else I can help with?", a.Amount), nil)
+		if d, err := h.Tools.DecideApproval(a.ID, true, t.AgentName+" (simulated)"); err == nil {
+			msg := "Done — I've approved it. "
+			switch {
+			case d.Kind == "return":
+				msg += fmt.Sprintf("Your prepaid return label is in your email, and the $%.2f refund is released as soon as the item reaches us.", d.Amount)
+			case d.Kind == "order" || d.Kind == "replacement":
+				msg += fmt.Sprintf("Order %s will ship soon.", d.OrderID)
+			case d.Refunded:
+				msg += fmt.Sprintf("$%.2f will be back on your original payment method in 5-7 business days.", d.Amount)
+			default:
+				msg += fmt.Sprintf("Your $%.2f refund is paid as soon as the returned item reaches us.", d.Amount)
+			}
+			h.say(t, "agent", msg+" Is there anything else I can help with?", nil)
 		}
 		return
 	}

@@ -160,6 +160,7 @@ export function themeButton(btn: HTMLElement): void {
 
 export const statusIcon: Record<string, string> = {
   placed: "clock", shipped: "truck", delivered: "check", cancelled: "x", return_requested: "refund",
-  refunded: "refund", refund_pending_approval: "clock",
+  refunded: "refund", refund_pending_approval: "clock", return_received: "refund", replacement_requested: "truck", on_hold: "clock", return_pending_approval: "clock",
 };
-export const statusLabel = (s: string) => ({ refund_pending_approval: "awaiting approval", return_requested: "return started" } as any)[s] || s.replace(/_/g, " ");
+export const statusLabel = (s: string) => ({ refund_pending_approval: "awaiting approval", return_requested: "return started",
+  return_received: "return received", return_pending_approval: "return in review", replacement_requested: "replacement sent", on_hold: "in review" } as any)[s] || s.replace(/_/g, " ");

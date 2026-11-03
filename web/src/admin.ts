@@ -80,15 +80,19 @@ async function loadMetrics(): Promise<void> {
 // ---------------- human approval queue ----------------
 async function loadApprovals(): Promise<void> {
   const d = await api("/api/admin/approvals");
-  $("#apNote").textContent = `Refunds above $${d.limit} (or over the daily refund count) wait here. Approving moves the money; rejecting puts the order back as it was.`;
+  $("#apNote").textContent = `Refunds above $${d.limit}, missing-item claims, large or frequent orders and big replacements wait here. A refund is paid only once the item is back (or confirmed lost).`;
   const pending = d.approvals.filter((a: any) => a.status === "pending");
-  $("#pending").innerHTML = pending.length ? table(["approval", "order", "customer", "amount", "why held", "customer reason", "since", ""],
-    pending.map((a: any) => [esc(a.id), esc(a.order_id), esc(a.customer_id), money(a.amount), esc(a.why), esc(a.reason || ""), new Date(a.created_at).toLocaleString(),
+  $("#pending").innerHTML = pending.length ? table(["approval", "type", "order", "customer", "amount", "why held", "customer said", "since", ""],
+    pending.map((a: any) => [esc(a.id), esc(a.kind || "refund"), esc(a.order_id), esc(a.customer_id), money(a.amount), esc(a.why), esc(a.reason || ""), new Date(a.created_at).toLocaleString(),
       `<button class="btn sm" data-ap="${esc(a.id)}" data-d="approve">Approve</button> <button class="btn ghost sm" data-ap="${esc(a.id)}" data-d="reject">Reject</button>`]))
     : `<tr><td class="muted">Nothing waiting. Try “I want a refund for O5008” as aarav@example.com.</td></tr>`;
   $("#decided").innerHTML = table(["approval", "order", "amount", "decision", "by"],
     d.approvals.filter((a: any) => a.status !== "pending").map((a: any) => [esc(a.id), esc(a.order_id), money(a.amount),
       `<span class="${a.status === "approved" ? "good" : "bad"}">${a.status}</span>`, esc(a.decided_by)]));
+  $("#returns").innerHTML = (d.returns || []).length ? table(["order", "customer", "RMA", "status", "refund on arrival", ""],
+    d.returns.map((o: any) => [esc(o.id), esc(o.customer_id), esc(o.rma || ""), esc(o.status.replace(/_/g, " ")), o.refund_on_receipt ? money(o.total) : "—",
+      `<button class="btn sm" data-rcv="${esc(o.id)}">Mark received</button>`]))
+    : `<tr><td class="muted">No returns in transit. Try “return O5009” as aarav@example.com.</td></tr>`;
   $("#tickets").innerHTML = table(["ticket", "customer", "summary"], (d.tickets || []).slice(-15).reverse().map((t: any) => [esc(t.id), esc(t.customer_id), esc(t.summary)]));
 }
 
@@ -249,6 +253,12 @@ document.addEventListener("click", async (ev) => {
   const ap = t.closest<HTMLElement>("[data-ap]");
   if (ap) {
     try { await api(`/api/admin/approvals/${ap.dataset.ap}`, { method: "POST", body: JSON.stringify({ decision: ap.dataset.d }) }); }
+    catch (e) { alert((e as Error).message); }
+    loadApprovals(); return;
+  }
+  const rcv = t.closest<HTMLElement>("[data-rcv]");
+  if (rcv) {
+    try { const r = await api<any>(`/api/admin/orders/${rcv.dataset.rcv}/receive`, { method: "POST" }); alert(r.message); }
     catch (e) { alert((e as Error).message); }
     loadApprovals(); return;
   }

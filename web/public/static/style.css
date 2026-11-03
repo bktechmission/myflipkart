@@ -51,13 +51,14 @@ svg.i{width:20px;height:20px;flex:none}
 .brand{display:flex;align-items:center;gap:10px;font-weight:600}
 
 /* app shell: rail | panel | main */
-.shell{display:grid;grid-template-columns:60px 300px 1fr;height:100%}
+/* the app fills the window and never scrolls as a page: only the conversation (and panels) scroll */
+.shell{display:grid;grid-template-columns:60px 300px 1fr;grid-template-rows:minmax(0,1fr);height:100vh;height:100dvh;overflow:hidden}
 .shell.wide{grid-template-columns:60px 1fr} .shell.wide .panel{display:none}
 .rail{display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 0;border-right:1px solid var(--line);background:var(--bg)}
 .rail .sp{flex:1}
 .panel{background:var(--shelf);border-right:1px solid var(--line);overflow-y:auto;padding:16px 12px}
 .panel h2{padding:0 6px 10px}
-.main{display:flex;flex-direction:column;min-width:0;height:100%}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;overflow:hidden}
 .topbar{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line)}
 .topbar .sp{flex:1}
 .avatar{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:13px;flex:none}
@@ -71,7 +72,7 @@ svg.i{width:20px;height:20px;flex:none}
 .status{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--mute);white-space:nowrap}
 .status svg.i{width:15px;height:15px}
 .status.delivered,.status.refunded{color:var(--good)} .status.cancelled{color:var(--mute)}
-.status.shipped,.status.placed{color:var(--ink)} .status.return_requested,.status.refund_pending_approval{color:var(--warn)}
+.status.shipped,.status.placed{color:var(--ink)} .status.return_requested,.status.refund_pending_approval,.status.on_hold,.status.return_received,.status.replacement_requested,.status.return_pending_approval{color:var(--warn)}
 
 /* conversation */
 .stream{flex:1;overflow-y:auto;padding:28px 20px}
@@ -103,7 +104,12 @@ svg.i{width:20px;height:20px;flex:none}
 details.how{margin-top:8px;font-size:13px} details.how summary{color:var(--mute);cursor:pointer;list-style:none}
 details.how summary::-webkit-details-marker{display:none}
 .howbox{background:var(--shelf);border-radius:10px;padding:10px 12px;margin-top:6px;overflow-x:auto}
-.compose{padding:12px 20px 18px}
+/* the composer floats over the conversation; messages scroll behind a soft fade */
+.stream{padding-bottom:36px;overscroll-behavior:contain}
+.compose{position:relative;z-index:2;margin-top:-32px;padding:32px 20px 18px;background:linear-gradient(to bottom,transparent,var(--bg) 30px)}
+.jump{position:absolute;left:50%;top:-14px;transform:translateX(-50%);width:36px;height:36px;border-radius:50%;border:1px solid var(--line);
+  background:var(--raise);color:var(--ink);box-shadow:var(--shadow);display:grid;place-items:center;cursor:pointer}
+.jump svg{width:18px;height:18px} .jump.hide{display:none}
 .box{max-width:720px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;border:1px solid var(--line);border-radius:14px;padding:6px 6px 6px 14px;background:var(--raise);box-shadow:var(--shadow)}
 .box textarea{flex:1;border:0;resize:none;background:transparent;padding:8px 0;outline:none;max-height:140px}
 .compose .note{max-width:720px;margin:6px auto 0;text-align:center;font-size:12.5px;color:var(--mute)}
@@ -114,7 +120,7 @@ details.how summary::-webkit-details-marker{display:none}
 .chip:hover{border-color:var(--accent)}
 
 /* shop + orders pages inside main */
-.page{flex:1;overflow-y:auto;padding:24px 20px}
+.page{flex:1;min-height:0;overflow-y:auto;padding:24px 20px}
 .page .in{max-width:980px;margin:0 auto}
 .filters{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 18px}
 .filters .chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -177,7 +183,7 @@ textarea.inp{width:100%;min-height:200px;line-height:1.5}
   .pp-grid{grid-template-columns:1fr}
 }
 @media (max-width:760px){
-  .shell,.shell.wide{grid-template-columns:1fr;grid-template-rows:1fr auto}
+  .shell,.shell.wide{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}
   .rail{order:2;flex-direction:row;justify-content:space-around;border-right:0;border-top:1px solid var(--line);padding:6px}
   .rail .sp{display:none}
   .panel{position:fixed;inset:0 0 56px 0;z-index:5;border:0;display:none}

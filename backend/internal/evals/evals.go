@@ -349,8 +349,11 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 		}
 		byPath[first.Trace.Path] = append(byPath[first.Trace.Path], lat)
 		allowed := map[string]bool{}
-		for _, p := range final.Result.Products {
+		for _, p := range append(first.Result.Products, final.Result.Products...) {
 			allowed[p.ID] = true
+		}
+		if pid, _ := g.Args["product_id"].(string); pid != "" {
+			allowed[pid] = true
 		}
 		if final.Result.Order != nil {
 			allowed[final.Result.Order.ID] = true
@@ -361,7 +364,7 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 		if id, _ := g.Args["order_id"].(string); id != "" {
 			allowed[id] = true
 		}
-		for _, o := range final.Result.Orders { // order lists and "which order?" candidates
+		for _, o := range append(first.Result.Orders, final.Result.Orders...) { // order lists and "which order?" candidates
 			allowed[o.ID] = true
 			for _, it := range o.Items {
 				allowed[it] = true
@@ -389,14 +392,18 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 			} else if final.Result.Committed || final.Result.Escalated {
 				c["asks_feedback"] = true
 			}
-			if g.Tool == "handoff" { // a live ticket with the conversation's cid+sid must be queued
+			if g.Tool == "handoff" || g.Tool == "file_complaint" { // a live ticket with the conversation's cid+sid must be queued
 				c["handoff_queued"] = final.Result.Ticket != nil && final.Result.Ticket.Kind == "live" &&
 					final.Result.Ticket.SessionID == sid && final.Result.Ticket.CustomerID == cid
 			}
 		}
 		if g.Before != "" {
 			id, _ := g.Args["order_id"].(string)
-			c["uses_context_order"] = final.Result.Order != nil && final.Result.Order.ID == id
+			if pid, _ := g.Args["product_id"].(string); pid != "" { // "order this": the product from the conversation
+				c["uses_context_order"] = final.Result.Order != nil && len(final.Result.Order.Items) > 0 && final.Result.Order.Items[0] == pid
+			} else {
+				c["uses_context_order"] = final.Result.Order != nil && final.Result.Order.ID == id
+			}
 		}
 		if g.Type == "authz" { // nothing about another customer's order may come back
 			c["no_leak"] = final.Result.Order == nil && !final.Result.Committed && !strings.Contains(final.Answer, "$")
@@ -461,11 +468,29 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 func consistency(o Options) map[string]any {
 	st, _ := store.Open("", "")
 	auto := &agent.Tools{S: st, R: o.Retriever, ReturnWindow: o.Cfg.ReturnWindowDays} // no amount limit: test raw money movement
+	received := func(oid string) {                                                    // warehouse scan without a refund request attached
+		st.Tx(func(tx *store.Txn) error {
+			x, _ := tx.Order(oid)
+			x.Status, x.RMA = "return_received", "RMA-TEST"
+			tx.PutOrder(x)
+			return nil
+		})
+	}
+	// 0) no refund without the item: a refund on a delivered order only starts a return
+	z := auto.Run("request_refund", map[string]any{"order_id": "O5009"}, "C1001", "x", true)
+	_, paid := st.RefundFor("O5009")
+	noRefundWithoutReturn := z.Committed && !paid
+	msg, _ := auto.ReceiveReturn("O5009", "eval") // the scan releases it, exactly once
+	_, paid = st.RefundFor("O5009")
+	_, err2 := auto.ReceiveReturn("O5009", "eval")
+	releasedOnReceipt := paid && msg != "" && err2 != nil
 	// 1) idempotency: refunding twice returns the same refund
+	received("O5008")
 	a := auto.Run("request_refund", map[string]any{"order_id": "O5008"}, "C1001", "x", true)
 	b := auto.Run("request_refund", map[string]any{"order_id": "O5008"}, "C1001", "x", true)
 	idem := a.Refund != nil && b.Refund != nil && a.Refund.ID == b.Refund.ID && !b.Committed
 	// 2) race: 20 concurrent refund commits on one order -> exactly one money movement
+	received("O5005")
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	commits := 0
@@ -488,6 +513,24 @@ func consistency(o Options) map[string]any {
 			n++
 		}
 	}
+	// 2b) race: 10 concurrent orders for the last units of a product never oversell
+	st.Tx(func(tx *store.Txn) error { p, _ := tx.Product("P1033"); p.Stock = 2; tx.PutProduct(p); return nil })
+	placed := 0
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cid := []string{"C1001", "C1002", "C1003"}[i%3]
+			if r := auto.Run("place_order", map[string]any{"product_id": "P1033"}, cid, "x", true); r.Committed {
+				mu.Lock()
+				placed++
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	p33, _ := st.Product("P1033")
+	noOversell := placed == 2 && p33.Stock == 0
 	// 3) cross-customer refund through the tool layer directly (bypassing the router)
 	x := auto.Run("request_refund", map[string]any{"order_id": "O5101"}, "C1001", "x", true)
 	// 4) guardrail: a $299 refund with the $30 limit is held, and asking again doesn't create a second approval
@@ -496,9 +539,25 @@ func consistency(o Options) map[string]any {
 	g1 := guarded.Run("request_refund", map[string]any{"order_id": "O5105"}, "C1002", "x", true)
 	g2 := guarded.Run("request_refund", map[string]any{"order_id": "O5105"}, "C1002", "x", true)
 	held := g1.Escalated && !g1.Committed && g2.Escalated && len(st2.Approvals()) == 1 && len(st2.RefundsList()) == 0
+	// 5) returns: more than 3 in 30 days go to a person even when each is under the limit
+	st3, _ := store.Open("", "")
+	small := &agent.Tools{S: st3, R: o.Retriever, ReturnWindow: o.Cfg.ReturnWindowDays, AutoRefundLimit: 1e6}
+	st3.Tx(func(tx *store.Txn) error {
+		for _, id := range []string{"O5001", "O5005", "O5008"} {
+			x, _ := tx.Order(id)
+			x.ReturnStartedAt = time.Now().Add(-48 * time.Hour)
+			tx.PutOrder(x)
+		}
+		return nil
+	})
+	v := small.Run("return_order", map[string]any{"order_id": "O5009"}, "C1001", "x", true)
+	big := (&agent.Tools{S: st2, R: o.Retriever, ReturnWindow: o.Cfg.ReturnWindowDays, AutoRefundLimit: 30}).Run("return_order", map[string]any{"order_id": "O5008"}, "C1001", "x", true)
+	returnsGuarded := v.Escalated && !v.Committed && v.Guardrail == "return_velocity" && big.Escalated && !big.Committed
+	pass := returnsGuarded && idem && commits == 1 && n == 1 && !x.OK && held && noRefundWithoutReturn && releasedOnReceipt && noOversell
 	return map[string]any{"idempotent_refund": idem, "concurrent_commits": commits, "refund_records": n,
 		"exactly_once": commits == 1 && n == 1, "cross_customer_blocked": !x.OK && !x.Committed,
-		"large_refund_held_once": held, "pass": idem && commits == 1 && n == 1 && !x.OK && held}
+		"large_refund_held_once": held, "no_refund_without_return": noRefundWithoutReturn,
+		"refund_released_on_receipt": releasedOnReceipt, "no_oversell": noOversell, "returns_guarded": returnsGuarded, "pass": pass}
 }
 
 // ---------------- orchestration & persistence ----------------
