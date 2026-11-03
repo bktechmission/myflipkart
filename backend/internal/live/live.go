@@ -31,6 +31,7 @@ import (
 	"asksauby/internal/agent"
 	"asksauby/internal/model"
 	"asksauby/internal/obs"
+	"asksauby/internal/seed"
 	"asksauby/internal/store"
 )
 
@@ -48,6 +49,7 @@ type Hub struct {
 	mu     sync.Mutex
 	typing map[string]string         // sid -> name of agent currently typing
 	inv    map[string]*investigation // ticket -> what the simulated teammate is checking
+	cases  map[string]*caseState     // ticket -> the concern the simulated teammate is resolving
 	joinMu sync.Mutex                // one agent per ticket, even if two click "Join" at once
 }
 
@@ -258,6 +260,13 @@ func (h *Hub) simGreet(t model.Ticket) {
 		greet += " Thanks for being a loyal customer."
 	}
 	if len(c.Approvals) == 0 {
+		if s := t.Summary; agent.IsNotReceived(s) || agent.IsFault(s) || agent.IsSellerIssue(s) {
+			// the teammate read the chat: pick up the concern without making the customer repeat it
+			h.say(t, "agent", greet+" I can see what happened, so let's get it sorted.", nil)
+			h.typeFor(t, 1500*time.Millisecond)
+			h.respond(t, s)
+			return
+		}
 		h.say(t, "agent", greet+" How can I help?", nil)
 		return
 	}
@@ -396,29 +405,316 @@ func (h *Hub) CustomerPhoto(t model.Ticket) {
 
 var byeRe = regexp.MustCompile(`(?i)^\s*(thanks|thank you|thx|that'?s all|no(pe)?|bye|all good|perfect)\b`)
 
-// simReply answers like a support teammate using agent-assist: the same tools Sauby
-// uses, run read-only (commit=false), phrased in first person.
+// caseState is what a simulated teammate is working on, so every reply moves the
+// customer's concern toward a resolution instead of starting over.
+type caseState struct {
+	topic   string // not_arrived | fault | seller
+	order   string
+	ask     string // pending question: which_order | replace_or_refund | anything_else
+	unclear int
+	caseID  string
+}
+
+var (
+	yesRe     = regexp.MustCompile(`(?i)^\s*(yes|yeah|yep|sure|ok(ay)?|please|go ahead|that'?s (right|it)|correct)\b`)
+	noRe      = regexp.MustCompile(`(?i)^\s*(no|nope|nah|not really)\b`)
+	refundRe  = regexp.MustCompile(`(?i)\b(refund|money back|return)\b`)
+	replaceRe = regexp.MustCompile(`(?i)\b(replace\w*|new one|another one|exchange|send (it|one) again)\b`)
+)
+
+func (h *Hub) caseFor(id string) *caseState {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cases == nil {
+		h.cases = map[string]*caseState{}
+	}
+	if h.cases[id] == nil {
+		h.cases[id] = &caseState{}
+	}
+	return h.cases[id]
+}
+
+func itemName(h *Hub, o model.Order) string {
+	if len(o.Items) > 0 {
+		if p, ok := h.S.Product(o.Items[0]); ok {
+			return p.Name
+		}
+	}
+	return o.ID
+}
+
+func niceDate(d string) string {
+	if t, err := time.Parse("2006-01-02", d); err == nil {
+		return t.Format("Mon, Jan 2")
+	}
+	return d
+}
+
+// simReply answers like a support teammate. Concerns about an order (missing,
+// faulty, seller) are worked through to a resolution: fixed now, or a tracked case
+// with an email to follow. Product and policy questions use agent-assist.
 func (h *Hub) simReply(t model.Ticket, text string) {
 	h.typeFor(t, 2000*time.Millisecond)
+	h.respond(t, text)
+}
+
+func (h *Hub) respond(t model.Ticket, text string) {
 	if h.investigate(t, text, false) {
 		return
 	}
-	if byeRe.MatchString(text) {
-		h.say(t, "agent", "You're welcome! I'll hand you back to Sauby now. Have a great day.", nil)
+	cs := h.caseFor(t.ID)
+	if byeRe.MatchString(text) && !(cs.ask == "replace_or_refund" || cs.ask == "which_order") || (cs.ask == "anything_else" && noRe.MatchString(text)) {
+		msg := "You're welcome! I'll hand you back to Sauby now. Have a great day."
+		if cs.caseID != "" {
+			msg = fmt.Sprintf("You're welcome! Your case is %s, and we'll keep you posted by email. I'll hand you back to Sauby now. Have a great day.", cs.caseID)
+		}
+		h.say(t, "agent", msg, nil)
 		h.Close(t.ID)
 		return
 	}
+	if id := agent.OrderRe.FindString(text); id != "" {
+		if o, ok := h.S.Order(strings.ToUpper(id)); ok && o.CustomerID == t.CustomerID {
+			cs.order = o.ID
+		}
+	}
+	switch { // what is this message about?
+	case agent.IsNotReceived(text):
+		cs.topic = "not_arrived"
+	case agent.IsSellerIssue(text):
+		cs.topic = "seller"
+	case agent.IsFault(text):
+		cs.topic = "fault"
+	}
+	if cs.topic == "" {
+		h.assist(t, cs, text)
+		return
+	}
+	if cs.order == "" { // find the order the concern is about, or ask
+		cands := h.candidates(t.CustomerID, cs.topic)
+		if len(cands) == 1 {
+			cs.order = cands[0].ID
+		} else if len(cands) > 1 {
+			if cs.ask == "which_order" && (yesRe.MatchString(text)) {
+				cs.order = cands[0].ID
+			} else {
+				cs.ask = "which_order"
+				var opts []string
+				for _, o := range cands {
+					when := "placed " + niceDate(o.PlacedOn)
+					if o.DeliveredOn != "" {
+						when = "delivered " + niceDate(o.DeliveredOn)
+					}
+					opts = append(opts, fmt.Sprintf("%s (%s, %s)", o.ID, itemName(h, o), when))
+				}
+				h.say(t, "agent", "I'm sorry about that, let me sort it out. Which order is it: "+strings.Join(opts, ", or ")+"? You can just type the order number.", nil)
+				return
+			}
+		} else {
+			h.say(t, "agent", "I'm sorry about that. I don't see a recent order this could be. Could you share the order number (it starts with O)?", nil)
+			return
+		}
+	}
+	h.resolve(t, cs, text)
+}
+
+// candidates are the customer's orders a concern is likely about.
+func (h *Hub) candidates(cid, topic string) []model.Order {
+	var out []model.Order
+	all := h.S.OrdersFor(cid)
+	for i := len(all) - 1; i >= 0 && len(out) < 3; i-- {
+		o := all[i]
+		switch topic {
+		case "not_arrived":
+			if o.Status == "shipped" || (o.Status == "delivered" && o.DeliveredOn >= time.Now().AddDate(0, 0, -30).Format("2006-01-02")) {
+				out = append(out, o)
+			}
+		default:
+			if o.Status == "delivered" {
+				out = append(out, o)
+			}
+		}
+	}
+	return out
+}
+
+// resolve works one concern to an outcome. Every branch ends with the customer
+// knowing what happens next.
+func (h *Hub) resolve(t model.Ticket, cs *caseState, text string) {
+	o, _ := h.S.Order(cs.order)
+	item := itemName(h, o)
+	st := h.Tools.CustomerStanding(t.CustomerID)
+	by := t.AgentName + " (simulated)"
+	if cs.ask == "replace_or_refund" { // answer to the question we just asked
+		h.replaceOrRefund(t, cs, o, text, by)
+		return
+	}
+	if cs.caseID != "" && cs.topic == "not_arrived" { // already investigating: say where it stands, don't start over
+		cs.ask = "anything_else"
+		h.say(t, "agent", fmt.Sprintf("I'm on it: case %s is open for order %s and the courier investigation is under way. You'll get an email with the outcome, usually within 1-2 business days, and you can reply to it with photos. Is there anything else I can help with?", cs.caseID, o.ID), nil)
+		return
+	}
+	switch cs.topic {
+	case "not_arrived":
+		if o.Status == "shipped" {
+			k, _ := h.Tools.OpenCase(t.CustomerID, t.SessionID, o.ID, "delivery_delay", "Order in transit, customer asked: "+text, false)
+			cs.caseID, cs.ask = k.ID, "anything_else"
+			h.say(t, "agent", fmt.Sprintf("Your %s (order %s) is still with the courier, so it hasn't been delivered yet. I've opened case %s to keep an eye on it. "+
+				"If it doesn't arrive in the next 3 business days, we'll send a replacement or refund you, whichever you prefer, and you'll get an email with every update. Anything else I can help with?", item, o.ID, k.ID), nil)
+			return
+		}
+		if o.Status != "delivered" {
+			cs.ask = "anything_else"
+			h.say(t, "agent", fmt.Sprintf("Order %s is %s, so it isn't marked as delivered. Is there anything else I can help with?", o.ID, strings.ReplaceAll(o.Status, "_", " ")), nil)
+			return
+		}
+		k, _ := h.Tools.OpenCase(t.CustomerID, t.SessionID, o.ID, "item_not_received",
+			fmt.Sprintf("%s (%s) marked delivered %s but customer says it didn't arrive: %s", item, o.ID, o.DeliveredOn, text), true)
+		cs.caseID = k.ID
+		h.say(t, "agent", fmt.Sprintf("I'm so sorry. The courier shows your %s (order %s) as delivered on %s, but you didn't get it. I've opened case %s and I'm checking the delivery scan and GPS location with the courier now.",
+			item, o.ID, niceDate(o.DeliveredOn), k.ID), nil)
+		h.typeFor(t, 2500*time.Millisecond)
+		if (st.Tier == "loyal" || o.Total <= 50) && st.Tier != "watch" && st.Tier != "blocked" {
+			cs.ask = "replace_or_refund"
+			h.say(t, "agent", "Since you're a valued customer, I don't want you waiting on the courier. I can send a free replacement right away, or refund you in full. Would you like a replacement? (yes for a replacement, no for a refund)", nil)
+			return
+		}
+		cs.ask = "anything_else"
+		h.say(t, "agent", fmt.Sprintf("Courier investigations usually take 1-2 business days. You'll get an email for case %s shortly; you can reply to it with any photos (like where packages are usually left) or details that might help. "+
+			"If the package can't be found, we'll send a replacement or a full refund. Is there anything else I can help with?", k.ID), nil)
+	case "fault", "seller":
+		if cs.topic == "seller" && cs.caseID == "" {
+			seller := ""
+			if len(o.Items) > 0 {
+				if p, ok := h.S.Product(o.Items[0]); ok {
+					seller = agentSeller(p.Category)
+				}
+			}
+			k, _ := h.Tools.OpenCase(t.CustomerID, t.SessionID, o.ID, "seller_complaint", fmt.Sprintf("Seller complaint · %s · %s: %s", o.ID, seller, text), false)
+			cs.caseID = k.ID
+			h.say(t, "agent", fmt.Sprintf("Thank you for telling us. I've opened case %s against %s; our marketplace team reviews every complaint and acts on sellers with repeated issues. You'll get an email with the outcome.", k.ID, seller), nil)
+		}
+		if o.Status != "delivered" {
+			cs.ask = "anything_else"
+			h.say(t, "agent", "Is there anything else I can help with?", nil)
+			return
+		}
+		if cs.ask != "replace_or_refund" {
+			cs.ask = "replace_or_refund"
+			h.say(t, "agent", fmt.Sprintf("For your %s (order %s), I can send a free replacement or start a return for a full refund. Would you like a replacement? (yes for a replacement, no for a refund)", item, o.ID), nil)
+			return
+		}
+	}
+	if cs.ask == "replace_or_refund" {
+		h.replaceOrRefund(t, cs, o, text, by)
+	}
+}
+
+func (h *Hub) replaceOrRefund(t model.Ticket, cs *caseState, o model.Order, text, by string) {
+	wantReplace := replaceRe.MatchString(text) || (yesRe.MatchString(text) && !refundRe.MatchString(text))
+	wantRefund := refundRe.MatchString(text) || noRe.MatchString(text)
+	if !wantReplace && !wantRefund {
+		cs.unclear++
+		if cs.unclear < 2 {
+			h.say(t, "agent", "Just say \"replacement\" or \"refund\" and I'll take care of it.", nil)
+			return
+		}
+		wantRefund = true // don't leave them hanging: default to the refund
+	}
+	cs.ask = "anything_else"
+	if cs.topic == "not_arrived" { // nothing to send back: approve the claim this teammate opened
+		if wantReplace {
+			h.closeClaim(o.ID, false, by) // withdraw the refund claim, then send the replacement
+			r := h.Tools.Run("replace_order", map[string]any{"order_id": o.ID, "reason": "not received (" + cs.caseID + ")"}, t.CustomerID, t.SessionID, true)
+			if r.Committed || r.Escalated {
+				nid := o.ID
+				if r.Order != nil {
+					nid = r.Order.ID
+				}
+				h.say(t, "agent", fmt.Sprintf("Done: a free replacement is on its way as order %s, shipping in 1-2 business days at no charge. There's nothing to send back, and the confirmation is in your email. Is there anything else I can help with?", nid), nil)
+				return
+			}
+			h.Tools.OpenCase(t.CustomerID, t.SessionID, o.ID, "item_not_received", "replacement unavailable, refunding: "+r.Message, true)
+			h.say(t, "agent", "That item is out of stock right now, so I'll refund you in full instead.", nil)
+		}
+		if d, err := h.closeClaim(o.ID, true, by); err == nil {
+			h.say(t, "agent", fmt.Sprintf("Done: I've approved a full refund of $%.2f for order %s. It reaches your original payment method in 5-7 business days, and the confirmation is on its way by email. Is there anything else I can help with?", d.Amount, o.ID), nil)
+			return
+		}
+		h.say(t, "agent", fmt.Sprintf("I've passed case %s to our claims team with everything from our chat; you'll get an email within 1 business day. Is there anything else I can help with?", cs.caseID), nil)
+		return
+	}
+	if wantReplace {
+		r := h.Tools.Run("replace_order", map[string]any{"order_id": o.ID, "reason": "faulty (teammate)"}, t.CustomerID, t.SessionID, true)
+		if r.Committed || r.Escalated {
+			h.say(t, "agent", r.Message+" Is there anything else I can help with?", nil)
+			return
+		}
+		h.say(t, "agent", r.Message+" So let's do a refund instead.", nil)
+	}
+	r := h.Tools.Run("return_order", map[string]any{"order_id": o.ID, "reason": "faulty (teammate)"}, t.CustomerID, t.SessionID, true)
+	if r.Committed {
+		h.say(t, "agent", r.Message+" Is there anything else I can help with?", nil)
+		return
+	}
+	if r.Escalated { // held for review: this teammate reviews it right here (condition is known: faulty)
+		for _, a := range h.S.Approvals() {
+			if a.OrderID == o.ID && a.Status == "pending" {
+				h.mu.Lock()
+				if h.inv == nil {
+					h.inv = map[string]*investigation{}
+				}
+				h.inv[t.ID] = &investigation{a: a, step: "condition", cond: "defective"}
+				h.mu.Unlock()
+				h.investigate(t, "it's defective", false)
+				return
+			}
+		}
+	}
+	k, _ := h.Tools.OpenCase(t.CustomerID, t.SessionID, o.ID, "return_review", "Teammate could not complete the return: "+r.Message, false)
+	h.say(t, "agent", fmt.Sprintf("I've opened case %s so a returns specialist can finish this; you'll get an email within 1 business day, and you can reply with photos of the issue. Is there anything else I can help with?", k.ID), nil)
+}
+
+// closeClaim decides the missing-item claim opened for an order.
+func (h *Hub) closeClaim(oid string, refund bool, by string) (model.Approval, error) {
+	for _, a := range h.S.Approvals() {
+		if a.OrderID == oid && a.Status == "pending" && a.NoReturn {
+			if !refund { // replaced instead: withdraw the refund claim (not a decline)
+				return a, h.Tools.WithdrawApproval(a.ID, by)
+			}
+			return h.Tools.DecideApproval(a.ID, agent.Decision{Approve: true, Condition: "not_received", Note: "courier could not confirm the drop-off"}, by)
+		}
+	}
+	return model.Approval{}, fmt.Errorf("no open claim for %s", oid)
+}
+
+// assist answers product, policy and order-status questions with agent-assist.
+// It never re-runs handoff or complaint tools: the customer is already with a person.
+func (h *Hub) assist(t model.Ticket, cs *caseState, text string) {
+	if cs.ask == "anything_else" && yesRe.MatchString(text) {
+		h.say(t, "agent", "Sure, what else can I help with?", nil)
+		cs.ask = ""
+		return
+	}
 	r := h.Router().Route(context.Background(), text, nil)
-	if r.Tool == "handoff" || r.Tool == "chitchat" {
-		h.say(t, "agent", "Sure — tell me a bit more, or share the order number and I'll look it up.", nil)
+	vague := r.Tool == "search_products" && len(strings.Fields(text)) <= 2 // "sure", "hmm", "ok then": not a product search
+	switch {
+	case !vague && (r.Tool == "search_products" || r.Tool == "price_search" || r.Tool == "get_product" ||
+		r.Tool == "policy_search" || r.Tool == "get_order" || r.Tool == "list_orders"):
+	default:
+		cs.unclear++
+		if cs.unclear >= 3 { // still unclear: open a case rather than going round in circles
+			k, _ := h.Tools.OpenCase(t.CustomerID, t.SessionID, cs.order, "general", "Teammate needs a specialist: "+text, false)
+			cs.caseID, cs.ask = k.ID, "anything_else"
+			h.say(t, "agent", fmt.Sprintf("I want to make sure this gets fully sorted, so I've opened case %s with our whole conversation. A specialist will email you within 1 business day, and you can reply with any photos or details. Is there anything else I can help with right now?", k.ID), nil)
+			return
+		}
+		h.say(t, "agent", "I'm here to help. Is this about an order that didn't arrive, an item that's faulty or wrong, a seller, or something else? If you have the order number (it starts with O), share it and I'll pull it up.", nil)
 		return
 	}
 	res := h.Tools.Run(r.Tool, r.Args, t.CustomerID, t.SessionID, false)
 	reply := res.Message
 	switch {
-	case res.NeedsConfirm:
-		reply = "I can " + res.Message + ". Sauby can complete that for you right after we finish here — just ask it and reply yes."
-	case len(res.Products) > 0:
+	case len(res.Products) > 0 && (r.Tool == "search_products" || r.Tool == "price_search" || r.Tool == "get_product"):
 		p := res.Products[0]
 		reply = fmt.Sprintf("I'd suggest the %s (%s) at $%.0f — %s.", p.Name, p.ID, p.Price, strings.Join(p.Features[:min(2, len(p.Features))], ", "))
 	case len(res.Chunks) > 0:
@@ -435,7 +731,8 @@ func (h *Hub) simReply(t model.Ticket, text string) {
 		}
 		reply = "Good question. " + strings.Join(parts, " ")
 	case res.Order != nil && res.OK:
-		reply = fmt.Sprintf("I've got order %s here: it's %s, total $%.2f.", res.Order.ID, strings.ReplaceAll(res.Order.Status, "_", " "), res.Order.Total)
+		cs.order = res.Order.ID
+		reply = fmt.Sprintf("I've got order %s here: it's %s, total $%.2f. Is something wrong with it?", res.Order.ID, strings.ReplaceAll(res.Order.Status, "_", " "), res.Order.Total)
 	case reply == "":
 		reply = "Let me check on that and get back to you in a moment."
 	}
@@ -448,3 +745,5 @@ func first(name string) string {
 	}
 	return name
 }
+
+func agentSeller(category string) string { return seed.SellerFor(category) }

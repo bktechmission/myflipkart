@@ -217,7 +217,12 @@ func (t *Tools) startReturn(tx *store.Txn, o model.Order, reason, sid string, re
 }
 
 // Phrases that mean "the item never reached me": no item to return, so a human checks with the courier.
-var notReceivedRe = regexp.MustCompile(`(?i)\b(never (arrived|came|got here|received|got it|delivered)|not (been )?(received|arrived)|didn'?t (receive|arrive|get (it|my|the))|hasn'?t arrived|missing|stolen|empty box|lost (in|package|parcel)?)\b`)
+var notReceivedRe = regexp.MustCompile(`(?i)\b(never (arrived|came|got here|received|got it|delivered|showed up)|not (been )?(received|arrived)|(did not|didn'?t|has not|hasn'?t|have not|haven'?t) (yet )?(been )?(receive|received|arrive|arrived|come|get (it|my|the|this)|show(ed)? up)|says delivered but|marked (as )?delivered but|not (at|on) my (door|porch)|missing|stolen|empty box|lost (in|package|parcel)?)\b`)
+
+// IsNotReceived, IsFault and IsSellerIssue classify a customer's message (used by teammates too).
+func IsNotReceived(s string) bool { return notReceivedRe.MatchString(s) }
+func IsFault(s string) bool       { return faultRe.MatchString(s) }
+func IsSellerIssue(s string) bool { return sellerRe.MatchString(s) }
 
 func (t *Tools) card(id string, h *search.Hit) Card {
 	p, _ := t.R.Product(id)
@@ -493,6 +498,9 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 			}
 			stock = t.takeStock(tx, n.Items)
 			o.Status, o.ReplacedBy, o.RMA = "replacement_requested", nid, rma(oid)
+			if strings.HasPrefix(reason, "not received") { // nothing to send back
+				o.RMA = ""
+			}
 			tx.PutOrder(n)
 			tx.PutOrder(o)
 			if review {
@@ -914,6 +922,25 @@ func (t *Tools) complaint(oid, about, summary, cid, sid string) ToolResult {
 	return ToolResult{OK: true, Ticket: &tk, Order: v, Message: msg, Guardrail: "complaint_to_human"}
 }
 
+// OpenCase records an investigation a teammate started (missing item, seller
+// complaint, anything that needs more time). Missing-item cases also go to the
+// claims team as a no-return refund request. The customer gets updates by email.
+func (t *Tools) OpenCase(cid, sid, oid, topic, summary string, claim bool) (model.Ticket, error) {
+	now := time.Now().UTC()
+	k := model.Ticket{ID: fmt.Sprintf("CASE-%d", now.UnixNano()%1e6), Kind: "case", Topic: topic, CustomerID: cid, SessionID: sid,
+		Summary: summary, Status: "open", CreatedAt: now}
+	err := t.S.Tx(func(tx *store.Txn) error {
+		tx.PutTicket(k)
+		if o, ok := tx.Order(oid); claim && ok && o.CustomerID == cid {
+			if _, waiting := tx.PendingApprovalFor(oid); !waiting {
+				t.hold(tx, o, "refund", o.Total, "missing item: courier investigation ("+k.ID+")", summary, sid, o.Status, true)
+			}
+		}
+		return nil
+	})
+	return k, err
+}
+
 // openLive queues the conversation for a human (idempotent per conversation).
 func (t *Tools) openLive(cid, sid, summary, topic string) (model.Ticket, error) {
 	if open, ok := t.S.OpenLiveTicket(sid); ok {
@@ -1172,6 +1199,24 @@ func (t *Tools) DecideApproval(id string, d Decision, by string) (model.Approval
 	})
 	t.mirrorStock(stock)
 	return out, err
+}
+
+// WithdrawApproval closes a pending request without a decision (e.g. the customer
+// chose a replacement instead). It doesn't count against the customer's standing.
+func (t *Tools) WithdrawApproval(id, by string) error {
+	return t.S.Tx(func(tx *store.Txn) error {
+		a, ok := tx.Approval(id)
+		if !ok || a.Status != "pending" {
+			return fmt.Errorf("approval %s is not pending", id)
+		}
+		a.Status, a.DecidedBy, a.DecidedAt = "withdrawn", by, time.Now().UTC()
+		tx.PutApproval(a)
+		if tk, ok := t.S.TicketLocked(a.TicketID); ok {
+			tk.Status, tk.AgentName, tk.ClosedAt = "closed", by, time.Now().UTC()
+			tx.PutTicket(tk)
+		}
+		return nil
+	})
 }
 
 // ApprovalUpdate is the message the customer sees when a teammate decides.
