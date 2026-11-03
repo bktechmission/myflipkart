@@ -22,6 +22,8 @@ type GoldenRow struct {
 	ExpectOK *bool          `json:"expect_ok,omitempty"`
 	Escalate bool           `json:"escalate,omitempty"` // a guardrail must hand this to a human
 	As       string         `json:"as,omitempty"`       // customer id to run as (default C1001)
+	Before   string         `json:"before,omitempty"`   // earlier turn in the same chat (tests "this order")
+	Choose   bool           `json:"choose,omitempty"`   // no order given: Sauby must ask which order
 }
 
 func b(v bool) *bool { return &v }
@@ -99,6 +101,11 @@ func Golden(products []model.Product) []GoldenRow {
 		{"what is your return policy for opened earbuds", "returns"}} {
 		g = append(g, GoldenRow{Query: p[0], Type: "policy", Tool: "policy_search", Index: "policies", Relevant: []string{p[1]}})
 	}
+	// "which order?" first: these change nothing, so they run while every demo order is still eligible
+	g = append(g,
+		GoldenRow{Query: "start a return", Type: "choose", Tool: "return_order", ExpectOK: b(true), Choose: true},
+		GoldenRow{Query: "I want to cancel my order", Type: "choose", Tool: "cancel_order", ExpectOK: b(true), Choose: true},
+	)
 	o := func(q, typ, tool, id string, ok bool, as string) GoldenRow {
 		return GoldenRow{Query: q, Type: typ, Tool: tool, Args: map[string]any{"order_id": id}, ExpectOK: b(ok), As: as}
 	}
@@ -122,6 +129,14 @@ func Golden(products []model.Product) []GoldenRow {
 		GoldenRow{Query: "details for product P1040", Type: "product_id", Tool: "get_product", Args: map[string]any{"product_id": "P1040"}, ExpectOK: b(true)},
 		GoldenRow{Query: "hi there!", Type: "chitchat", Tool: "chitchat"},
 		GoldenRow{Query: "thanks, that's all", Type: "chitchat", Tool: "chitchat"},
+		// order history and multi-turn context
+		GoldenRow{Query: "get my orders", Type: "order", Tool: "list_orders", ExpectOK: b(true)},
+		GoldenRow{Query: "show my order history", Type: "order", Tool: "list_orders", ExpectOK: b(true)},
+		GoldenRow{Before: "where is my order O5001", Query: "return this order", Type: "context", Tool: "return_order",
+			Args: map[string]any{"order_id": "O5001"}, ExpectOK: b(true)},
+		GoldenRow{Before: "track O5004 please", Query: "cancel it", Type: "context", Tool: "cancel_order",
+			Args: map[string]any{"order_id": "O5004"}, ExpectOK: b(true)},
+		GoldenRow{Query: "how do returns work?", Type: "policy", Tool: "policy_search", Index: "policies", Relevant: []string{"returns"}},
 		GoldenRow{Query: "I want to talk to a human agent", Type: "handoff", Tool: "handoff", ExpectOK: b(true)},
 		GoldenRow{Query: "this is useless, connect me to a real person", Type: "handoff", Tool: "handoff", ExpectOK: b(true)},
 	)

@@ -130,7 +130,7 @@ func report(r *evals.Result) {
 	}
 	if e := r.E2E; e != nil {
 		fmt.Printf("\nE2E (%s)", e.Router)
-		keys := []string{"pass", "tool_ok", "outcome_ok", "confirm_before_commit", "escalation_ok", "asks_feedback", "handoff_queued", "no_leak", "grounded", "hit@5"}
+		keys := []string{"pass", "tool_ok", "outcome_ok", "confirm_before_commit", "escalation_ok", "asks_feedback", "handoff_queued", "asks_which_order", "uses_context_order", "no_leak", "grounded", "hit@5"}
 		for _, k := range keys {
 			fmt.Printf("  %s=%.3f", k, e.Rates[k])
 		}

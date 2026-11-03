@@ -35,12 +35,16 @@ var (
 	OrderRe   = regexp.MustCompile(`(?i)\bO\d{4}\b`)
 	ProductRe = regexp.MustCompile(`(?i)\bP\d{4}\b`)
 	handoffRe = regexp.MustCompile(`(?i)\b(human|a person|real person|live agent|an agent|representative|customer service|speak to someone|talk to someone|call me)\b`)
-	latestRe  = regexp.MustCompile(`(?i)\b(my|latest|last|recent)\b.*\border\b|\bmy orders\b`)
-	cancelRe  = regexp.MustCompile(`(?i)\bcancel`)
-	refundRe  = regexp.MustCompile(`(?i)\b(refund|money back|reimburse)`)
-	returnRe  = regexp.MustCompile(`(?i)\b(return|send (it |this )?back)`)
-	policyRe  = regexp.MustCompile(`(?i)\b(polic(y|ies)|refund|warranty|shipping|delivery|deliver|return window|send (something|it|items?) back|return|cancel|money back|covered)\b`)
-	chatRe    = regexp.MustCompile(`(?i)^\s*(hi|hello|hey|thanks|thank you|thx|bye|good (morning|evening)|ok|okay|yes|no)\b`)
+	// "return this order", "start a return", "I want to cancel my order": an action, not a policy question
+	actionRe   = regexp.MustCompile(`(?i)(^\s*(please\s+)?(return|cancel|refund)\b|\b(start|initiate|process|open|begin|create|make)\s+(a\s+|the\s+)?(return|refund|cancellation)\b|\bi\s*('d|would|want|need|wanna)\s*(like\s+)?(to\s+)?(return|cancel|refund|get a refund)\b|\b(return|cancel|refund)\s+(this|that|it|my|the|an?)\b|\b(this|that)\s+(order|one|item|purchase)\b)`)
+	questionRe = regexp.MustCompile(`(?i)^\s*(how|what|when|why|which|is|are|do|does|can i|could i|will|policy)\b|\?\s*$`)
+	listRe     = regexp.MustCompile(`(?i)\b(my|all|recent|past|previous)\s+orders\b|\border history\b|\b(show|list|get|see|view)\b.*\borders\b|\bwhat (did|have) i (order|bought|buy)`)
+	latestRe   = regexp.MustCompile(`(?i)\b(my|latest|last|recent)\b.*\border\b|\bmy orders\b`)
+	cancelRe   = regexp.MustCompile(`(?i)\bcancel`)
+	refundRe   = regexp.MustCompile(`(?i)\b(refund|money back|reimburse)`)
+	returnRe   = regexp.MustCompile(`(?i)\b(return|send (it |this )?back)`)
+	policyRe   = regexp.MustCompile(`(?i)\b(polic(y|ies)|refunds?|warranty|warranties|shipping|delivery|deliver|return window|send (something|it|items?) back|returns?|returning|cancel\w*|money back|covered)\b`)
+	chatRe     = regexp.MustCompile(`(?i)^\s*(hi|hello|hey|thanks|thank you|thx|bye|good (morning|evening)|ok|okay|yes|no)\b`)
 )
 
 // RuleRouter is the deterministic baseline (and the degraded mode when no LLM is up).
@@ -65,6 +69,20 @@ func (RuleRouter) Route(_ context.Context, text string, _ []llm.Message) Route {
 		default:
 			r.Tool = "get_order"
 		}
+	case actionRe.MatchString(text) && !(questionRe.MatchString(text) && !regexp.MustCompile(`(?i)\b(this|that|my)\s+order\b`).MatchString(text)):
+		// order action without an id: the agent fills it from the conversation or asks which order
+		switch {
+		case cancelRe.MatchString(text):
+			r.Tool = "cancel_order"
+		case refundRe.MatchString(text):
+			r.Tool, r.Args["reason"] = "request_refund", text
+		case returnRe.MatchString(text):
+			r.Tool, r.Args["reason"] = "return_order", text
+		default:
+			r.Tool = "get_order"
+		}
+	case listRe.MatchString(text):
+		r.Tool = "list_orders"
 	case latestRe.MatchString(text) && !refundRe.MatchString(text) && !cancelRe.MatchString(text) && !returnRe.MatchString(text):
 		r.Tool, r.Args["order_id"] = "get_order", "LATEST" // resolved to the customer's newest order by the tool
 	case ProductRe.MatchString(text):
@@ -94,7 +112,10 @@ Pick exactly ONE tool for the customer's latest message:
 - search_products: find products by need, feature, brand or model name
 - price_search: product search with a price limit (put the bounds in min_price / max_price)
 - get_product: the customer gives a product ID like P1003
-- get_order / cancel_order / return_order / request_refund: the customer gives an order ID like O5003
+- list_orders: the customer wants to see their orders or order history
+- get_order / cancel_order / return_order / request_refund: about one order. Pass order_id if the customer gives
+  one (like O5003); if they say "this order" or give none, OMIT order_id - the system uses the order from the
+  conversation or asks which one
 - policy_search: general questions about returns, refunds, cancellation, shipping, warranty (no order ID)
 - handoff: the customer asks for a human or is clearly frustrated
 If the message is only a greeting or thanks, reply briefly without a tool.

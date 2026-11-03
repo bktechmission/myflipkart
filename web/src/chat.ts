@@ -134,8 +134,18 @@ function addAgentTurn(text: string, name: string, kind: string, askFeedback = ""
 function renderAnswer(res: any, history = false): string {
   const r = res.result || {};
   // Template answers list every product; when cards show them, keep only the lead line.
-  const cardsShown = r.products?.length && String(res.trace?.answer_mode || "").startsWith("template");
+  const cardsShown = (r.products?.length || r.orders?.length) && String(res.trace?.answer_mode || "").startsWith("template");
   let html = md(cardsShown ? (res.answer || "").split("\n")[0] : res.answer || "");
+  if (r.orders?.length) { // order history, or the candidates when Sauby asks "which order?"
+    html += r.orders.map((o: any) => `<div class="ocard"><img class="thumb" src="/img/${o.items?.[0]}.svg" alt="">
+      <div style="flex:1"><b>${esc(o.item_cards?.[0]?.name || o.id)}</b>${o.item_cards?.length > 1 ? ` <span class="muted">+${o.item_cards.length - 1} more</span>` : ""}
+      <div class="muted">${o.id} · ${money(o.total)}</div>
+      <div class="status ${o.status}">${icon(statusIcon[o.status] || "clock")}${esc(statusLabel(o.status))}</div></div>
+      ${r.choices?.length || history ? "" : `<button class="btn ghost sm" data-q="I need help with order ${o.id}">Get help</button>`}</div>`).join("");
+  }
+  if (r.choices?.length && !history) {
+    html += `<div class="actions">${r.choices.map((c: any) => `<button class="btn ghost sm" data-q="${esc(c.say)}">${esc(c.label)}</button>`).join("")}</div>`;
+  }
   if (r.products?.length) {
     html += `<div class="cards">` + r.products.slice(0, 6).map((p: any) => `<a class="pcard" href="/p/${p.id}">
       <img src="/img/${p.id}.svg" alt="" loading="lazy"><div class="b"><div class="n">${esc(p.name)}</div>

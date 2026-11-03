@@ -233,7 +233,7 @@ func runRouter(rt agent.Router, golden []seed.GoldenRow) *RouterResult {
 			res.Mistakes = append(res.Mistakes, map[string]any{"query": g.Query, "expected": g.Tool, "predicted": pred, "args": r.Args})
 			continue
 		}
-		if len(g.Args) > 0 {
+		if len(g.Args) > 0 && g.Before == "" { // context rows get their id from the earlier turn, not the router
 			argN++
 			ok := true
 			for k, want := range g.Args {
@@ -335,6 +335,9 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 			cid = "C1001"
 		}
 		sid := fmt.Sprintf("%016x", i+1)
+		if g.Before != "" {
+			ag.Handle(context.Background(), cid, sid, g.Before, nil)
+		}
 		first := ag.Handle(context.Background(), cid, sid, g.Query, nil)
 		final := first
 		if first.NeedsConfirm {
@@ -358,6 +361,12 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 		if id, _ := g.Args["order_id"].(string); id != "" {
 			allowed[id] = true
 		}
+		for _, o := range final.Result.Orders { // order lists and "which order?" candidates
+			allowed[o.ID] = true
+			for _, it := range o.Items {
+				allowed[it] = true
+			}
+		}
 		grounded := true
 		for _, id := range append(first.CitedIDs, final.CitedIDs...) {
 			grounded = grounded && allowed[id]
@@ -365,12 +374,14 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 		c := map[string]bool{"tool_ok": first.Tool == g.Tool, "grounded": grounded}
 		if g.ExpectOK != nil {
 			c["outcome_ok"] = final.OK == *g.ExpectOK
-			if agent.ConfirmTools[g.Tool] && *g.ExpectOK {
+			if g.Choose { // no order given: must ask which one, offering eligible orders, and change nothing
+				c["asks_which_order"] = len(final.Result.Choices) > 0 && !final.Result.Committed
+			} else if agent.ConfirmTools[g.Tool] && *g.ExpectOK {
 				// money path must ask first, and only "yes" commits (or escalates)
 				c["confirm_before_commit"] = first.NeedsConfirm && !first.Result.Committed &&
 					(final.Result.Committed || final.Result.Escalated)
 			}
-			if g.Tool == "request_refund" && *g.ExpectOK { // guardrail: big refunds must go to a human
+			if g.Tool == "request_refund" && *g.ExpectOK && !g.Choose { // guardrail: big refunds must go to a human
 				c["escalation_ok"] = final.Result.Escalated == g.Escalate && final.Result.Committed == !g.Escalate
 			}
 			if final.AskFeedback == "" && (final.Result.Committed || final.Result.Escalated) {
@@ -382,6 +393,10 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 				c["handoff_queued"] = final.Result.Ticket != nil && final.Result.Ticket.Kind == "live" &&
 					final.Result.Ticket.SessionID == sid && final.Result.Ticket.CustomerID == cid
 			}
+		}
+		if g.Before != "" {
+			id, _ := g.Args["order_id"].(string)
+			c["uses_context_order"] = final.Result.Order != nil && final.Result.Order.ID == id
 		}
 		if g.Type == "authz" { // nothing about another customer's order may come back
 			c["no_leak"] = final.Result.Order == nil && !final.Result.Committed && !strings.Contains(final.Answer, "$")
@@ -412,7 +427,7 @@ func runE2E(o Options, golden []seed.GoldenRow) (*E2EResult, error) {
 			res.Failures = append(res.Failures, row)
 		}
 	}
-	for _, k := range []string{"tool_ok", "outcome_ok", "grounded", "hit@5", "confirm_before_commit", "escalation_ok", "asks_feedback", "handoff_queued", "no_leak"} {
+	for _, k := range []string{"tool_ok", "outcome_ok", "grounded", "hit@5", "confirm_before_commit", "escalation_ok", "asks_feedback", "handoff_queued", "asks_which_order", "uses_context_order", "no_leak"} {
 		n, ok := 0, 0
 		for _, r := range res.Rows {
 			if v, has := r.Checks[k]; has {

@@ -80,6 +80,22 @@ func templateAnswer(tool string, args map[string]any, res ToolResult, reply stri
 			fmt.Fprintf(&b, "\n- **%s** (%s) - $%.0f, %.1f stars: %s", p.Name, p.ID, p.Price, p.Rating, strings.Join(feats, ", "))
 		}
 		return b.String()
+	case len(res.Choices) > 0:
+		return res.Message
+	case tool == "list_orders" && len(res.Orders) > 0:
+		var b strings.Builder
+		b.WriteString("Here are your recent orders:")
+		for _, o := range res.Orders {
+			name := ""
+			if len(o.ItemCards) > 0 {
+				name = o.ItemCards[0].Name
+				if len(o.ItemCards) > 1 {
+					name += fmt.Sprintf(" +%d more", len(o.ItemCards)-1)
+				}
+			}
+			fmt.Fprintf(&b, "\n- **%s** · %s · %s · $%.2f", o.ID, name, strings.ReplaceAll(o.Status, "_", " "), o.Total)
+		}
+		return b.String()
 	case tool == "policy_search" && len(res.Chunks) > 0:
 		// Without an LLM to synthesize, quote the top two passages so a near-miss at rank 1
 		// still gets the customer the right answer (and the sources show where it came from).

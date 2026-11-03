@@ -33,6 +33,7 @@ type Agent struct {
 
 	mu      sync.Mutex
 	pending map[string]pendingAction // by session
+	focus   map[string]string        // by session: the order the conversation is about ("this order")
 	history map[string][]llm.Message
 }
 
@@ -81,7 +82,7 @@ var (
 
 func New(t *Tools, s *store.Store, gw *llm.Gateway, mode, source string) *Agent {
 	return &Agent{Tools: t, Store: s, GW: gw, Mode: mode, Source: source,
-		pending: map[string]pendingAction{}, history: map[string][]llm.Message{}}
+		pending: map[string]pendingAction{}, history: map[string][]llm.Message{}, focus: map[string]string{}}
 }
 
 func (a *Agent) router() Router {
@@ -101,7 +102,7 @@ func (a *Agent) Router() Router { return a.router() }
 
 func pathOf(tool string) string {
 	switch tool {
-	case "get_order", "cancel_order", "return_order", "request_refund":
+	case "get_order", "list_orders", "cancel_order", "return_order", "request_refund":
 		return "transaction"
 	case "chitchat":
 		return "chitchat"
@@ -114,7 +115,7 @@ func pathOf(tool string) string {
 var progress = map[string]string{
 	"search_products": "Searching the catalog…", "price_search": "Filtering by price…",
 	"get_product": "Pulling up that product…", "policy_search": "Checking our policies…",
-	"get_order": "Looking up your order…", "cancel_order": "Checking whether it can still be cancelled…",
+	"get_order": "Looking up your order…", "list_orders": "Pulling up your orders…", "cancel_order": "Checking whether it can still be cancelled…",
 	"return_order": "Checking the return window…", "request_refund": "Checking refund eligibility…",
 	"handoff": "Connecting you with a teammate…",
 }
@@ -168,6 +169,17 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 		if q, _ := args["query"].(string); q == "" && (route.Tool == "search_products" || route.Tool == "policy_search" || route.Tool == "price_search") {
 			args["query"] = text
 		}
+		// "return this order": use the order the conversation is about
+		if route.Tool == "cancel_order" || route.Tool == "return_order" || route.Tool == "request_refund" || route.Tool == "get_order" {
+			if id, _ := args["order_id"].(string); !OrderRe.MatchString(id) && id != "LATEST" {
+				a.mu.Lock()
+				f := a.focus[sid]
+				a.mu.Unlock()
+				if f != "" {
+					args["order_id"] = f
+				}
+			}
+		}
 		route.Args = args
 		t1 := time.Now()
 		resp.Result = a.Tools.Run(route.Tool, args, cid, sid, false)
@@ -187,6 +199,14 @@ func (a *Agent) Handle(ctx context.Context, cid, sid, text string, emit func(str
 
 	resp.Tool, resp.Args = route.Tool, route.Args
 	resp.OK = resp.Result.OK
+	a.mu.Lock() // remember which order we're talking about
+	if id := OrderRe.FindString(text); id != "" {
+		a.focus[sid] = strings.ToUpper(id)
+	}
+	if resp.Result.Order != nil && resp.Result.OK {
+		a.focus[sid] = resp.Result.Order.ID
+	}
+	a.mu.Unlock()
 	resp.Trace.Router, resp.Trace.Provider, resp.Trace.Model = route.Router, route.Provider, route.Model
 	resp.Trace.Failover, resp.Trace.Complex, resp.Trace.RouterErr = route.Failover, route.Complex, route.Err
 	resp.Trace.Tokens += route.Tokens

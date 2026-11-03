@@ -87,7 +87,7 @@ func Load() Config {
 		}
 	}
 	c := Config{
-		Addr:               env("ADDR", portAddr()), // ADDR, else :$PORT (Render, Cloud Run), else :8080
+		Addr:               env("ADDR", portAddr()),                                            // ADDR, else :$PORT (Render, Cloud Run), else :8080
 		PublicURL:          strings.TrimRight(env("PUBLIC_URL", "http://localhost:8080"), "/"), // "auto" = from each request
 		DataDir:            env("DATA_DIR", "data"),
 		WebDir:             env("WEB_DIR", "../web/public"),

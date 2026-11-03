@@ -8,6 +8,8 @@
   {"metric": "e2e.escalation_ok", "min": 1},
   {"metric": "e2e.asks_feedback", "min": 1},
   {"metric": "e2e.handoff_queued", "min": 1},
+  {"metric": "e2e.asks_which_order", "min": 1},
+  {"metric": "e2e.uses_context_order", "min": 1},
   {"metric": "e2e.grounded", "min": 0.98},
   {"metric": "e2e.consistency", "min": 1},
   {"metric": "e2e.slo", "min": 1}

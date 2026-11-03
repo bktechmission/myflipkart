@@ -28,18 +28,19 @@ var ToolSchemas = []map[string]any{
 			"min_price": {"number", "Lower bound in USD; omit if none"}, "max_price": {"number", "Upper bound in USD; omit if none"}}, "query"),
 	fn("get_product", "Get full details for one product by ID like P1003.", props{"product_id": {"string", ""}}, "product_id"),
 	fn("get_order", "Look up status, items and dates of one of the customer's orders by ID like O5003. Use LATEST for their most recent order.", props{"order_id": {"string", "Order ID, or LATEST"}}, "order_id"),
-	fn("cancel_order", "Cancel one of the customer's orders before it ships (refund is automatic).", props{"order_id": {"string", ""}}, "order_id"),
-	fn("return_order", "Start a return (RMA + label) for a delivered order within the return window.",
-		props{"order_id": {"string", ""}, "reason": {"string", "Why the customer is returning it"}}, "order_id"),
-	fn("request_refund", "Refund an order: a delivered order within the return window, or an order whose return was already started.",
-		props{"order_id": {"string", ""}, "reason": {"string", "Why the customer wants a refund"}}, "order_id"),
+	fn("list_orders", "List the customer's recent orders (order history).", props{}),
+	fn("cancel_order", "Cancel one of the customer's orders before it ships (refund is automatic). Omit order_id if not given.", props{"order_id": {"string", "Order ID if the customer gave one"}}),
+	fn("return_order", "Start a return (RMA + label) for a delivered order within the return window. Omit order_id if not given.",
+		props{"order_id": {"string", "Order ID if the customer gave one"}, "reason": {"string", "Why the customer is returning it"}}),
+	fn("request_refund", "Refund an order: a delivered order within the return window, or one whose return was started. Omit order_id if not given.",
+		props{"order_id": {"string", "Order ID if the customer gave one"}, "reason": {"string", "Why the customer wants a refund"}}),
 	fn("policy_search", "Answer general questions about MyFlipKart.com policies: returns, refunds, cancellation, shipping, warranty. Use when no order ID is given.",
 		props{"query": {"string", ""}}, "query"),
 	fn("handoff", "Transfer the customer to a human support agent when they ask for a person or are frustrated.",
 		props{"summary": {"string", "One-line summary of the issue for the human agent"}}, "summary"),
 }
 
-var ToolNames = []string{"search_products", "price_search", "get_product", "get_order", "cancel_order",
+var ToolNames = []string{"search_products", "price_search", "get_product", "list_orders", "get_order", "cancel_order",
 	"return_order", "request_refund", "policy_search", "handoff", "chitchat"}
 
 var ConfirmTools = map[string]bool{"cancel_order": true, "return_order": true, "request_refund": true}
@@ -68,6 +69,12 @@ type Card struct {
 	Scores   *search.Hit `json:"scores,omitempty"`
 }
 
+// Choice is a suggested reply the customer can tap (e.g. "Return O5009").
+type Choice struct {
+	Label string `json:"label"`
+	Say   string `json:"say"`
+}
+
 type OrderView struct {
 	model.Order
 	ItemCards []Card `json:"item_cards"`
@@ -89,6 +96,8 @@ type ToolResult struct {
 	Refund       *model.Refund         `json:"refund,omitempty"`
 	Ticket       *model.Ticket         `json:"ticket,omitempty"`
 	Approval     *model.Approval       `json:"approval,omitempty"`
+	Orders       []*OrderView          `json:"orders,omitempty"`  // list_orders, or candidates when asking "which order?"
+	Choices      []Choice              `json:"choices,omitempty"` // tappable follow-ups for the customer
 	Retrieval    *search.RetrievalInfo `json:"retrieval,omitempty"`
 	NeedsConfirm bool                  `json:"needs_confirm,omitempty"`
 	Committed    bool                  `json:"committed,omitempty"` // the customer's action is done
@@ -157,6 +166,9 @@ func (t *Tools) Run(name string, args map[string]any, cid, sid string, commit bo
 			return ToolResult{Message: "Please sign in with your MyFlipKart.com account to view or change orders.", Guardrail: "guest_blocked"}
 		}
 		oid := strings.ToUpper(str("order_id"))
+		if !OrderRe.MatchString(oid) && oid != "LATEST" && name != "get_order" {
+			return t.chooseOrder(name, cid) // "start a return" with no order in context: ask which one
+		}
 		if oid == "LATEST" || oid == "" { // "where is my latest order?"
 			mine := t.S.OrdersFor(cid)
 			if len(mine) == 0 {
@@ -165,6 +177,19 @@ func (t *Tools) Run(name string, args map[string]any, cid, sid string, commit bo
 			oid = mine[len(mine)-1].ID
 		}
 		return t.orderAction(name, oid, str("reason"), cid, sid, commit)
+	case "list_orders":
+		if strings.HasPrefix(cid, "G-") {
+			return ToolResult{Message: "Please sign in with your MyFlipKart.com account to see your orders.", Guardrail: "guest_blocked"}
+		}
+		mine := t.S.OrdersFor(cid)
+		res := ToolResult{OK: true}
+		for i := len(mine) - 1; i >= 0 && len(res.Orders) < 6; i-- { // newest first
+			res.Orders = append(res.Orders, t.view(mine[i]))
+		}
+		if len(res.Orders) == 0 {
+			res.Message = "I don't see any orders on your account yet."
+		}
+		return res
 	case "handoff":
 		if strings.HasPrefix(cid, "G-") {
 			return ToolResult{Message: "Please sign in so a teammate can see your account and orders.", Guardrail: "guest_blocked"}
@@ -339,6 +364,51 @@ func (t *Tools) orderAction(kind, oid, reason, cid, sid string, commit bool) Too
 	if err != nil {
 		return ToolResult{Message: "Sorry, I couldn't save that change. Nothing was charged or refunded. Please try again."}
 	}
+	return res
+}
+
+// chooseOrder lists the orders an action applies to so the customer can pick one.
+func (t *Tools) chooseOrder(action, cid string) ToolResult {
+	if strings.HasPrefix(cid, "G-") {
+		return ToolResult{Message: "Please sign in with your MyFlipKart.com account to view or change orders.", Guardrail: "guest_blocked"}
+	}
+	verb := map[string]string{"cancel_order": "cancel", "return_order": "return", "request_refund": "refund"}[action]
+	res := ToolResult{OK: true}
+	mine := t.S.OrdersFor(cid)
+	for i := len(mine) - 1; i >= 0; i-- {
+		o := mine[i]
+		age := 0
+		if o.DeliveredOn != "" {
+			d, _ := time.Parse("2006-01-02", o.DeliveredOn)
+			age = int(time.Since(d).Hours() / 24)
+		}
+		ok := false
+		switch action {
+		case "cancel_order":
+			ok = o.Status == "placed"
+		case "return_order":
+			ok = o.Status == "delivered" && age <= t.ReturnWindow
+		case "request_refund":
+			ok = (o.Status == "delivered" && age <= t.ReturnWindow) || o.Status == "return_requested"
+		}
+		if !ok {
+			continue
+		}
+		v := t.view(o)
+		res.Orders = append(res.Orders, v)
+		name := o.ID
+		if len(v.ItemCards) > 0 {
+			name = v.ItemCards[0].Name
+		}
+		res.Choices = append(res.Choices, Choice{Label: fmt.Sprintf("%s · %s · $%.0f", o.ID, name, o.Total), Say: verb + " " + o.ID})
+	}
+	if len(res.Choices) == 0 {
+		res.OK = false
+		res.Message = fmt.Sprintf("I don't see any orders that can be %s right now. Say \"my orders\" to see them all.",
+			map[string]string{"cancel": "cancelled (only orders that haven't shipped)", "return": "returned (delivered in the last 30 days)", "refund": "refunded"}[verb])
+		return res
+	}
+	res.Message = fmt.Sprintf("Which order would you like to %s?", verb)
 	return res
 }
 
