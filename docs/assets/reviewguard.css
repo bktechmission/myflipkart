@@ -1,0 +1,47 @@
+/*
+ * Ask Sauby · MyFlipKart.com — ReviewGuard walkthrough styles (uses site.css tokens, light + black)
+ * Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+ */
+.blurb{color:var(--mute);margin:-6px 0 16px;max-width:760px}
+.rg{display:grid;grid-template-columns:330px 1fr;gap:24px;align-items:start;margin-bottom:36px}
+.review{border:1px solid var(--line);background:var(--raise);border-radius:16px;padding:12px 14px;margin-bottom:12px}
+.review .stars{color:#c07a12;letter-spacing:1px} .review .who{color:var(--mute);font-size:13px;margin-left:8px}
+.review p{margin:6px 0 0;font-size:14.5px}
+.pipeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px}
+.st button{width:100%;display:flex;gap:10px;align-items:center;text-align:left;border:1px solid transparent;background:none;border-radius:11px;padding:6px 9px;cursor:pointer;font:inherit;color:inherit}
+.st button:disabled{cursor:default}
+.st .n{width:24px;height:24px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;background:var(--shelf);color:var(--mute);border:1px solid var(--line)}
+.st .t{display:flex;flex-direction:column;min-width:0;line-height:1.3}.st .t b{font-weight:600;font-size:14px}.st small{color:var(--mute);font-size:12px}
+.st.done .n{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.st.on button{background:var(--raise);border-color:var(--accent)} .st.on .n{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.st.skip{opacity:.45} .st.skip .t b{text-decoration:line-through;text-decoration-thickness:1px}
+.g-submit .n{box-shadow:inset 0 -3px 0 var(--k-edge)} .g-rules .n{box-shadow:inset 0 -3px 0 var(--k-rag)} .g-llm .n{box-shadow:inset 0 -3px 0 var(--k-llm)}
+.g-decide .n{box-shadow:inset 0 -3px 0 var(--k-core)} .g-people .n{box-shadow:inset 0 -3px 0 var(--k-human)} .g-loop .n{box-shadow:inset 0 -3px 0 var(--k-loop)}
+.rg-right{min-width:0}
+#step{border:1px solid var(--line);background:var(--raise);border-radius:18px;padding:18px 20px;min-height:340px}
+#step h2{margin:0 0 6px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.kicker{color:var(--accent);font-size:13px;font-weight:600;margin:0 0 6px}
+.lead{font-size:16px;margin:0 0 12px}
+.badge{font-size:12.5px;font-weight:600;border-radius:99px;padding:2px 10px;border:1px solid}
+.badge.good{color:var(--accent);border-color:var(--accent)} .badge.warn{color:#b26a00;border-color:#b26a00} .badge.bad{color:#c0392b;border-color:#c0392b}
+:root[data-theme="black"] .badge.warn{color:#e3a54a;border-color:#e3a54a} :root[data-theme="black"] .badge.bad{color:#f27a6e;border-color:#f27a6e}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .badge.warn{color:#e3a54a;border-color:#e3a54a}:root:not([data-theme="light"]) .badge.bad{color:#f27a6e;border-color:#f27a6e}}
+pre.data{margin:0;background:var(--shelf);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto}
+.jk{color:var(--accent)} .jn{color:#b26a00} .js{color:var(--ink)}
+:root[data-theme="black"] .jn{color:#e3a54a} @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .jn{color:#e3a54a}}
+.checks{list-style:none;padding:0;margin:0 0 12px;display:grid;gap:4px}
+.checks li{border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:14px}
+.checks li.ok{border-color:var(--accent);color:var(--ink)} .checks li.no{border-color:#c0392b}
+.skips{margin-top:14px;border-top:1px dashed var(--line);padding-top:10px;font-size:14px;color:var(--mute)}
+.skips ul{margin:6px 0 0;padding-left:18px}
+.rg-right .controls{margin-top:12px}
+.steps{flex-wrap:wrap}
+@media (max-width:900px){
+  .rg{grid-template-columns:1fr}
+  .pipeline{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px}
+  .st small{display:none}
+  .top{padding:12px 16px;flex-wrap:wrap;gap:8px} .top nav{gap:10px;flex-wrap:wrap;font-size:14px}
+  main{padding:0 16px} #step{padding:14px}
+}
+@media (min-width:901px){.rg-right{position:sticky;top:12px}}

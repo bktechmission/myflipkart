@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1700 1060" font-family="Helvetica, Arial, sans-serif">
+<title>ReviewGuard: one review, end to end</title>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>
+<rect width="1700" height="1060" fill="#ffffff"/>
+<text x="30" y="46" font-size="28" font-weight="600" fill="#1e1e1e">ReviewGuard: one review, end to end</text>
+<text x="30" y="76" font-size="16" fill="#495057">Saved first, checked by rules and behaviour, labelled by an LLM only when needed, verified by code, decided by plain rules, people for anything severe</text>
+<rect x="20" y="100" width="1660" height="150" rx="14" fill="#dbe4ff" fill-opacity=".35" stroke="#dbe4ff"/>
+<text x="32" y="124" font-size="16" fill="#495057">Submit (API)</text>
+<rect x="40" y="140" width="240" height="90" rx="12" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="160.0" y="180.68" font-size="16" font-weight="600" text-anchor="middle" fill="#1e1e1e">Shopper</text>
+<text x="160.0" y="200.68" font-size="16" text-anchor="middle" fill="#1e1e1e">own delivered order</text>
+<rect x="340" y="140" width="280" height="90" rx="12" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="480.0" y="171.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">POST /api/reviews</text>
+<text x="480.0" y="190.4" font-size="15" text-anchor="middle" fill="#1e1e1e">auth · CSRF · rate limit</text>
+<text x="480.0" y="209.15" font-size="15" text-anchor="middle" fill="#1e1e1e">idempotency key</text>
+<rect x="680" y="140" width="300" height="90" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="830.0" y="171.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">WAL (fsync)</text>
+<text x="830.0" y="190.4" font-size="15" text-anchor="middle" fill="#1e1e1e">review saved PENDING</text>
+<text x="830.0" y="209.15" font-size="15" text-anchor="middle" fill="#1e1e1e">before any reply</text>
+<rect x="1040" y="140" width="300" height="90" rx="12" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1190.0" y="171.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Moderation job</text>
+<text x="1190.0" y="190.4" font-size="15" text-anchor="middle" fill="#1e1e1e">runs now; Recover() finishes</text>
+<text x="1190.0" y="209.15" font-size="15" text-anchor="middle" fill="#1e1e1e">anything left pending</text>
+<rect x="20" y="280" width="1660" height="200" rx="14" fill="#e9ecef" fill-opacity=".35" stroke="#e9ecef"/>
+<text x="32" y="304" font-size="16" fill="#495057">Deterministic checks (code)</text>
+<rect x="40" y="330" width="280" height="120" rx="12" fill="#e9ecef" stroke="#1e1e1e" stroke-width="2"/>
+<text x="180.0" y="367.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Normalize</text>
+<text x="180.0" y="386.1" font-size="15" text-anchor="middle" fill="#1e1e1e">NFKC subset · look-alikes</text>
+<text x="180.0" y="404.85" font-size="15" text-anchor="middle" fill="#1e1e1e">l33t · zero-width · spacing</text>
+<text x="180.0" y="423.6" font-size="15" text-anchor="middle" fill="#1e1e1e">(original kept)</text>
+<rect x="370" y="330" width="320" height="120" rx="12" fill="#e9ecef" stroke="#1e1e1e" stroke-width="2"/>
+<text x="530.0" y="367.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Content rules</text>
+<text x="530.0" y="386.1" font-size="15" text-anchor="middle" fill="#1e1e1e">contact · links · placeholder slurs</text>
+<text x="530.0" y="404.85" font-size="15" text-anchor="middle" fill="#1e1e1e">insults by target · threats</text>
+<text x="530.0" y="423.6" font-size="15" text-anchor="middle" fill="#1e1e1e">injection · language · duplicates</text>
+<rect x="740" y="330" width="420" height="120" rx="12" fill="#e9ecef" stroke="#1e1e1e" stroke-width="2"/>
+<text x="950.0" y="367.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Authenticity (behaviour)</text>
+<text x="950.0" y="386.1" font-size="15" text-anchor="middle" fill="#1e1e1e">verified purchase · seller-linked · paid</text>
+<text x="950.0" y="404.85" font-size="15" text-anchor="middle" fill="#1e1e1e">too fast · new single-seller · templated</text>
+<text x="950.0" y="423.6" font-size="15" text-anchor="middle" fill="#1e1e1e">burst (rating pauses) · rival 1★ · rings</text>
+<rect x="1210" y="330" width="450" height="120" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1435.0" y="367.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Data it reads</text>
+<text x="1435.0" y="386.1" font-size="15" text-anchor="middle" fill="#1e1e1e">orders + delivery times · identities</text>
+<text x="1435.0" y="404.85" font-size="15" text-anchor="middle" fill="#1e1e1e">(device, card, address, network)</text>
+<text x="1435.0" y="423.6" font-size="15" text-anchor="middle" fill="#1e1e1e">seller payouts · other reviews</text>
+<rect x="20" y="510" width="1660" height="200" rx="14" fill="#fff4e6" fill-opacity=".35" stroke="#fff4e6"/>
+<text x="32" y="534" font-size="16" fill="#495057">Tagger (only for unclear cases, and to label what was found)</text>
+<rect x="40" y="560" width="380" height="120" rx="12" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="230.0" y="597.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Input guard</text>
+<text x="230.0" y="616.1" font-size="15" text-anchor="middle" fill="#1e1e1e">review + photo text as quoted data</text>
+<text x="230.0" y="634.85" font-size="15" text-anchor="middle" fill="#1e1e1e">between delimiters · size caps</text>
+<text x="230.0" y="653.6" font-size="15" text-anchor="middle" fill="#1e1e1e">injection flag stated, never hidden</text>
+<rect x="470" y="560" width="330" height="120" rx="12" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="635.0" y="597.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">LLM tagger (via gateway)</text>
+<text x="635.0" y="616.1" font-size="15" text-anchor="middle" fill="#1e1e1e">only matching policy clauses</text>
+<text x="635.0" y="634.85" font-size="15" text-anchor="middle" fill="#1e1e1e">temperature 0 · no tools</text>
+<text x="635.0" y="653.6" font-size="15" text-anchor="middle" fill="#1e1e1e">cache: hash + policy version</text>
+<rect x="850" y="560" width="330" height="120" rx="12" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1015.0" y="597.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Output guard</text>
+<text x="1015.0" y="616.1" font-size="15" text-anchor="middle" fill="#1e1e1e">strict JSON · rule_id enum</text>
+<text x="1015.0" y="634.85" font-size="15" text-anchor="middle" fill="#1e1e1e">severe = 2 agreeing runs</text>
+<text x="1015.0" y="653.6" font-size="15" text-anchor="middle" fill="#1e1e1e">confidence never read</text>
+<rect x="1230" y="560" width="430" height="120" rx="12" fill="#e9ecef" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1445.0" y="597.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Rule tagger (no LLM configured)</text>
+<text x="1445.0" y="616.1" font-size="15" text-anchor="middle" fill="#1e1e1e">same JSON from the rule findings</text>
+<text x="1445.0" y="634.85" font-size="15" text-anchor="middle" fill="#1e1e1e">ROUTER=rules: the free public demo</text>
+<text x="1445.0" y="653.6" font-size="15" text-anchor="middle" fill="#1e1e1e">UI says which tagger ran</text>
+<rect x="20" y="740" width="1660" height="150" rx="14" fill="#d3f9d8" fill-opacity=".35" stroke="#d3f9d8"/>
+<text x="32" y="764" font-size="16" fill="#495057">Decide (code) and act</text>
+<rect x="40" y="780" width="360" height="90" rx="12" fill="#e9ecef" stroke="#1e1e1e" stroke-width="2"/>
+<text x="220.0" y="811.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Verifier</text>
+<text x="220.0" y="830.4" font-size="15" text-anchor="middle" fill="#1e1e1e">quotes exact at offsets · rule exists</text>
+<text x="220.0" y="849.15" font-size="15" text-anchor="middle" fill="#1e1e1e">agrees with the signals</text>
+<rect x="450" y="780" width="400" height="90" rx="12" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="650.0" y="811.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Decision engine (plain rules)</text>
+<text x="650.0" y="830.4" font-size="15" text-anchor="middle" fill="#1e1e1e">same inputs → same action · star-blind</text>
+<text x="650.0" y="849.15" font-size="15" text-anchor="middle" fill="#1e1e1e">LLM down/slow/unsure → hold</text>
+<rect x="900" y="780" width="380" height="90" rx="12" fill="#b2f2bb" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1090.0" y="811.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Action</text>
+<text x="1090.0" y="830.4" font-size="15" text-anchor="middle" fill="#1e1e1e">publish · mask then publish · not counted</text>
+<text x="1090.0" y="849.15" font-size="15" text-anchor="middle" fill="#1e1e1e">hold for a person · reject (rule cited)</text>
+<rect x="1330" y="780" width="330" height="90" rx="12" fill="#b2f2bb" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1495.0" y="811.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Trust-weighted rating</text>
+<text x="1495.0" y="830.4" font-size="15" text-anchor="middle" fill="#1e1e1e">verified + trusted only, Bayesian</text>
+<text x="1495.0" y="849.15" font-size="15" text-anchor="middle" fill="#1e1e1e">&#x27;based on N verified reviews&#x27;</text>
+<rect x="20" y="910" width="1660" height="130" rx="14" fill="#ffe3e3" fill-opacity=".35" stroke="#ffe3e3"/>
+<text x="32" y="934" font-size="16" fill="#495057">People, appeals, audit, evals</text>
+<rect x="40" y="945" width="360" height="80" rx="12" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<text x="220.0" y="980.95" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Moderation queue (Admin → Reviews)</text>
+<text x="220.0" y="999.7" font-size="15" text-anchor="middle" fill="#1e1e1e">cases by severity and reach</text>
+<rect x="450" y="945" width="330" height="80" rx="12" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<text x="615.0" y="980.95" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Sanctions need a person</text>
+<text x="615.0" y="999.7" font-size="15" text-anchor="middle" fill="#1e1e1e">strike · freeze · delist · ban</text>
+<rect x="830" y="945" width="330" height="80" rx="12" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<text x="995.0" y="980.95" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Appeals</text>
+<text x="995.0" y="999.7" font-size="15" text-anchor="middle" fill="#1e1e1e">author or seller → a 2nd moderator</text>
+<rect x="1210" y="945" width="220" height="80" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1320.0" y="980.95" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Audit log</text>
+<text x="1320.0" y="999.7" font-size="15" text-anchor="middle" fill="#1e1e1e">model · prompt · policy</text>
+<rect x="1460" y="945" width="200" height="80" rx="12" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1560.0" y="980.95" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Evals + gates</text>
+<text x="1560.0" y="999.7" font-size="15" text-anchor="middle" fill="#1e1e1e">make gate</text>
+<line x1="280" y1="185" x2="340" y2="185" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="620" y1="185" x2="680" y2="185" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="980" y1="185" x2="1040" y2="185" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1190" y1="230" x2="180" y2="330" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="320" y1="390" x2="370" y2="390" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="690" y1="390" x2="740" y2="390" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1210" y1="390" x2="1160" y2="390" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="530" y1="450" x2="230" y2="560" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<text x="386.0" y="499.0" font-size="13" fill="#495057">unclear or flagged</text>
+<line x1="420" y1="620" x2="470" y2="620" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="800" y1="620" x2="850" y2="620" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1060" y1="450" x2="1440" y2="560" stroke="#1e1e1e" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#a)"/>
+<text x="1256.0" y="499.0" font-size="13" fill="#495057">no LLM</text>
+<line x1="1000" y1="680" x2="220" y2="780" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="400" y1="825" x2="450" y2="825" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="850" y1="825" x2="900" y2="825" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1280" y1="825" x2="1330" y2="825" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1090" y1="870" x2="220" y2="945" stroke="#c92a2a" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#a)"/>
+<text x="661.0" y="901.5" font-size="13" fill="#495057">held</text>
+<line x1="400" y1="985" x2="450" y2="985" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="780" y1="985" x2="830" y2="985" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1160" y1="985" x2="1210" y2="985" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1430" y1="985" x2="1460" y2="985" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+</svg>

@@ -8,7 +8,7 @@ Ask Sauby is the shopping assistant for **MyFlipKart.com**, a fictional store. I
 - human handoff;
 - metrics, evals and a loop for shipping better agents.
 
-**▶ [Try the live demo](https://asksauby.onrender.com)** · **[Watch a request flow through the system](https://bktechmission.github.io/myflipkart/)**: an animated walkthrough of search, refunds and human handoff.
+**▶ [Try the live demo](https://asksauby.onrender.com)** · **[Watch a request flow through the system](https://bktechmission.github.io/myflipkart/)**: an animated walkthrough of search, refunds and human handoff · **[Follow one review through ReviewGuard](https://bktechmission.github.io/myflipkart/reviewguard.html)** · **[Architecture reference](docs/architecture/README.md)**
 
 ![Architecture](docs/architecture.png)
 
@@ -60,6 +60,29 @@ The demo runs on one machine with no infrastructure. Each component sits behind 
 | Metrics | **Prometheus** + Grafana | `GET /metrics` (Prometheus text format) |
 | Logs | **Loki / Elasticsearch / S3** | JSON lines on stdout + `data/events.jsonl` |
 
+## ReviewGuard: guarded product reviews
+
+Shoppers review products they bought, and every review is guarded end to end: abusive or unsafe wording is caught,
+fake, paid and seller-driven reviews are detected by behaviour, an LLM labels reviews against written rules only when
+needed, people decide anything severe, and sellers can't harm each other or the store.
+
+![ReviewGuard](docs/architecture/reviewguard.svg)
+
+<sub>Source: [`docs/architecture/reviewguard.excalidraw`](docs/architecture/reviewguard.excalidraw). Full page: [`docs/architecture/reviewguard.md`](docs/architecture/reviewguard.md).</sub>
+
+1. **Submit.** A signed-in shopper reviews an order they own once it's delivered. The review is saved **PENDING through the WAL (fsync) before any reply**, with an idempotency key, and rate limited per customer. A crash between save and decision is finished by `Recover()` on start, exactly once.
+2. **Normalize** (NFKC subset, look-alike letters, l33t, zero-width and spacing tricks; the original is kept) and run **deterministic rules**: contact info and links (masked by code), placeholder slurs, insults aimed at people (not at products, not quoted from someone else), threats, prompt injection, language, near-duplicates.
+3. **Authenticity, from behaviour only:** verified purchase, accounts sharing a device, card, address or network with the seller's staff, cashback after a 5★, "used it for months" minutes after delivery, new single-seller accounts, templated wording, bursts that outgrow real deliveries (the rating pauses at its last trusted value until a person clears it), rival-linked 1★ attacks and review rings.
+4. **LLM tagger, only for unclear cases and to label what was found**, through the same LLM gateway. Guarded input (review and photo text as quoted data between delimiters, size caps, the injection flag stated), only the matching clauses of the versioned [policy library](backend/internal/reviews/policy/policy.json), strict JSON output with `rule_id` from a fixed enum, temperature 0, a cache by content hash + policy version, and two agreeing runs for severe labels. It has no tools and never rewrites text. **With no LLM configured (`ROUTER=rules`, the free demo), a rule tagger produces the same JSON**, and the UI says which one ran.
+5. **Verifier** (plain code): every quote must be the exact text at its offsets, the rule must exist in the current policy, and labels must agree with the rule signals. Otherwise the label is discarded and a person decides. Self-reported confidence is never read.
+6. **Decision engine** (plain rules, same inputs → same action, never reads the stars for content rules): publish, mask then publish, not counted, hold for a person, or reject with the rule cited. Honest negative reviews are always published and counted (FTC 2024 consumer-review rule). Fail-safe: if the LLM is down, slow or unsure, hold; never auto-reject without evidence.
+7. **Trust-weighted rating:** a Bayesian average of verified, trusted reviews toward the category mean, shown as "based on N verified reviews". Admins also see the naive average.
+8. **People:** Admin → Reviews is a queue ordered by severity and reach. Cases group related reviews ("12 reviews on Quietude Zen 7 linked to SoundNest Store") with the evidence, highlighted quotes, which tagger ran and a suggested action. Moderators approve or dismiss with a note; seller strikes, rating freezes, delisting and bans need a person. Authors and sellers appeal, and a second moderator decides. Everything goes to the audit log with model, prompt and policy versions.
+
+**Try it:** sign in as the admin → **Admin → Reviews** → the demo buttons (*Seller buys fake 5★ reviews*, *Rival sends 1★ attack*, *Real viral day (genuine)*, *Abusive and tricky reviews*, *Reset*) run clearly labelled simulations on **synthetic data** through the real pipeline. Then open the product page each one links to. Sign in as meera@example.com to write a review on a product you received, or as seller@example.com (a synthetic seller) to see the seller view and appeal.
+
+**Honest numbers:** the rule tagger scores 100% on the dev golden set because its rules were written next to it. A **held-out** set written independently ([`golden/heldout.json`](backend/internal/reviews/golden)) is scored separately, and its gates apply to it too.
+
 ## What we measure
 
 | Area | Metrics |
@@ -79,6 +102,8 @@ The demo runs on one machine with no infrastructure. Each component sits behind 
 | `internal/agent` (unit + agent) | own-orders-only authZ, guest blocks, no refund without the item, $29 → person, 4th return in 30 days → person, condition + photo required to approve, exactly-once refunds under 30 concurrent requests, no overselling, replacement rules, customer standing, suspended sellers, missing-item claims, real customer phrasing → tools, multi-turn context and confirm/deny, LLM outage → rules fallback |
 | `internal/live` (agent) | demo teammates resolve every concern without looping: missing item → replacement/refund or a tracked case + email; faulty item → replacement or reviewed refund; used items declined; held orders and big claims left for real staff |
 | `internal/store` (fault) | restart durability, torn last write ignored, failed transaction changes nothing, 40 concurrent writers with unique order IDs, path-traversal-proof keys |
+| `internal/reviews` | normalization offsets, content rules, the strict JSON parser, prompt guards, the LLM tagger through the real gateway against a fake server, a scripted fake LLM (hallucinated quotes and rules, malformed, extra fields, outages, timeouts, nondeterminism), the verifier, deterministic and star-blind decisions, durability and crash recovery, exactly-once under concurrent submits and retries, paid-review re-checks, burst pauses, ratings, the demo scenarios and every eval gate |
+| `internal/api` (ReviewGuard) | customers review only their own delivered orders; sellers can't moderate their own cases, see reviewer identity, or suppress a rival by reporting; admin-only routes; appeals need a second moderator; the product page escapes review text; every package and route has an architecture page |
 | `internal/api` (security) | 401/403 on every protected route, tampered/expired cookies, CSRF header, cross-site sign-in blocked, conversations bound to their owner (no reading or posting into someone else's chat, live chat, feedback or photos), upload validation (type, size, pixel bombs, re-encoding), body limits, security headers, Secure cookies behind HTTPS, stored XSS, proxy-aware IP limits |
 
 ### Evals and release gates
@@ -89,7 +114,7 @@ make eval-llm      # judge the LLM router instead of the rule router
 make gate          # what CI runs: exits 1 if any gate fails
 ```
 
-Gates live in [`backend/evals/gates.json`](backend/evals/gates.json). A new agent version ships only if every gate passes, and several are zero-tolerance (leaks, confirm-before-commit, escalation).
+Gates live in [`backend/evals/gates.json`](backend/evals/gates.json). ReviewGuard's include auto-reject precision ≥ 99%, 0 honest negative reviews hidden, 0 seller-linked or unverified reviews counted, 0 false flags on a genuine viral day, and 100% of invented quotes and rule ids rejected (`make eval` prints per-rule precision/recall and per-language accuracy). A new agent version ships only if every gate passes, and several are zero-tolerance (leaks, confirm-before-commit, escalation).
 
 **Example the evals caught:** adding page-text and rating signals to the reranker lowered recall@5 from 1.000 to 0.987. Those signals are now off. See [`backend/internal/search/rerank.go`](backend/internal/search/rerank.go).
 
@@ -135,6 +160,7 @@ Open http://localhost:8080 (or the [live demo](https://asksauby.onrender.com)) �
 | aarav@example.com | admin + customer | yes |
 | meera@example.com | customer | yes |
 | sam@example.com | customer | no |
+| seller@example.com | seller (SoundNest Store, synthetic) | no |
 
 The admin console is at http://localhost:8080/admin.
 
@@ -261,12 +287,19 @@ backend/                Go, standard library only
   internal/auth         OIDC, JWT verification, signed sessions
   internal/api          HTTP: auth, chat (SSE), admin, metrics
   internal/obs          Prometheus metrics + JSON logs
-  internal/evals        retrieval / router / e2e suites, gates
+  internal/evals        retrieval / router / e2e / reviews suites, gates
+  internal/reviews      ReviewGuard: policy library, rules, authenticity, taggers, verifier, decisions, moderation
 web/                    TypeScript UI (chat, orders, shop, admin), light + black themes
-docs/                   GitHub Pages walkthrough + Excalidraw architecture
+docs/                   GitHub Pages walkthroughs (chat, ReviewGuard) + Excalidraw architecture
+docs/architecture/      the reference page and diagram for every system
 cloudflare/             Worker + Container config for the public demo
 Dockerfile              one image: server + UI + embedded demo sign-in
 ```
+
+### Keep the architecture current
+
+Every feature change updates its page and diagram in [`docs/architecture/`](docs/architecture/README.md) in the same PR.
+`make test` fails if a package in `backend/internal/` or `backend/cmd/`, or an HTTP route, isn't mentioned there.
 
 ---
 

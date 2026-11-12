@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+  Ask Sauby · MyFlipKart.com — how ReviewGuard works (animated walkthrough)
+  Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How ReviewGuard works</title>
+<meta name="description" content="Step by step: what happens to one product review behind the scenes. Rules, behaviour patterns, a guarded LLM tagger, a verifier, plain-rule decisions, people, appeals, audit and evals.">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="assets/reviewguard.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark">S</span>ReviewGuard</div>
+  <nav><a href="./">Chat walkthrough</a><a href="https://asksauby.onrender.com">Live demo</a><a href="https://github.com/bktechmission/myflipkart">GitHub</a>
+    <button class="iconbtn" id="theme" aria-label="Switch theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button></nav>
+</header>
+
+<main>
+  <section class="intro">
+    <h1>What happens to one review</h1>
+    <p>ReviewGuard checks every review on MyFlipKart.com, a fictional store. Pick a review and follow it step by step: saved first, checked by rules and behaviour, labelled by an LLM only when needed, verified by code, decided by plain rules, and handed to people for anything severe.</p>
+  </section>
+
+  <div class="scenarios" id="scenarios" role="tablist" aria-label="Scenarios"></div>
+  <p class="blurb" id="blurb"></p>
+
+  <section class="rg">
+    <aside class="rg-left">
+      <div class="review" id="review" aria-label="The review"></div>
+      <ol class="pipeline" id="pipeline" aria-label="Pipeline stages"></ol>
+    </aside>
+    <div class="rg-right">
+      <article id="step" aria-live="polite"></article>
+      <div class="controls">
+        <button id="prev" class="btn ghost">Back</button>
+        <button id="play" class="btn">Pause</button>
+        <button id="next" class="btn ghost">Next</button>
+        <div class="steps" id="dots"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="measure">
+    <h2>The rules of the road</h2>
+    <div class="mgrid">
+      <div><h3>Never lose a review</h3><p>Saved through the write-ahead log (fsync) before any reply, with an idempotency key; a crash is recovered exactly once.</p></div>
+      <div><h3>Honest is always published</h3><p>Content rules are applied the same way at 1★ and 5★. Honest negative reviews are always shown and counted.</p></div>
+      <div><h3>Behaviour decides what counts</h3><p>Verified purchase, links to seller staff, paid reviews, bursts, rival attacks and rings; never sentiment.</p></div>
+      <div><h3>The LLM labels, code decides</h3><p>Quoted input, matching rules only, strict JSON, two runs for severe labels, a verifier, and a fail-safe hold.</p></div>
+      <div><h3>People decide anything severe</h3><p>Strikes, freezes, delisting and bans need a person. Appeals go to a second moderator. Everything is audited.</p></div>
+      <div><h3>Gated by evals</h3><p>Auto-reject precision ≥ 99%, zero honest negatives hidden, zero untrusted reviews counted, zero false flags on a viral day.</p></div>
+    </div>
+  </section>
+
+  <section class="arch">
+    <h2>Architecture</h2>
+    <img src="architecture/reviewguard.svg" alt="ReviewGuard architecture: submit and WAL, deterministic checks, the guarded tagger, verifier and decision engine, people, appeals, audit and evals">
+    <p class="detail">Source: <a href="architecture/reviewguard.excalidraw">reviewguard.excalidraw</a> (open it at excalidraw.com) · <a href="https://github.com/bktechmission/myflipkart/blob/main/docs/architecture/reviewguard.md">ReviewGuard architecture page</a> · <a href="https://github.com/bktechmission/myflipkart/tree/main/docs/architecture">all systems</a></p>
+  </section>
+</main>
+<footer>Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake · MyFlipKart.com, its sellers, shoppers and reviews are fictional. Placeholder words stand in for slurs.</footer>
+<script type="module" src="assets/reviewguard.js"></script>
+</body>
+</html>

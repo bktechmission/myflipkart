@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 560" font-family="Helvetica, Arial, sans-serif">
+<title>Observability, evals and release gates</title>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>
+<rect width="1500" height="560" fill="#ffffff"/>
+<text x="30" y="46" font-size="28" font-weight="600" fill="#1e1e1e">Observability, evals and release gates</text>
+<text x="30" y="76" font-size="16" fill="#495057">Measure every turn and review; ship only what passes the gates</text>
+<rect x="20" y="100" width="1460" height="190" rx="14" fill="#c5f6fa" fill-opacity=".35" stroke="#c5f6fa"/>
+<text x="32" y="124" font-size="16" fill="#495057">Run time</text>
+<rect x="40" y="150" width="330" height="110" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="205.0" y="191.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Prometheus /metrics</text>
+<text x="205.0" y="210.4" font-size="15" text-anchor="middle" fill="#1e1e1e">sauby_* and reviewguard_*</text>
+<text x="205.0" y="229.15" font-size="15" text-anchor="middle" fill="#1e1e1e">latency · tokens · flags</text>
+<rect x="400" y="150" width="330" height="110" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="565.0" y="200.95" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">JSON logs + events.jsonl</text>
+<text x="565.0" y="219.7" font-size="15" text-anchor="middle" fill="#1e1e1e">one line per chat turn</text>
+<rect x="760" y="150" width="330" height="110" rx="12" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<text x="925.0" y="191.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Admin dashboards</text>
+<text x="925.0" y="210.4" font-size="15" text-anchor="middle" fill="#1e1e1e">Ops · Business · Reviews</text>
+<text x="925.0" y="229.15" font-size="15" text-anchor="middle" fill="#1e1e1e">SLOs · KPIs · audit log</text>
+<rect x="1120" y="150" width="340" height="110" rx="12" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1290.0" y="191.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Feedback + insights</text>
+<text x="1290.0" y="210.4" font-size="15" text-anchor="middle" fill="#1e1e1e">thumbs-down, zero results,</text>
+<text x="1290.0" y="229.15" font-size="15" text-anchor="middle" fill="#1e1e1e">overturned decisions</text>
+<rect x="20" y="320" width="1460" height="210" rx="14" fill="#fff9db" fill-opacity=".35" stroke="#fff9db"/>
+<text x="32" y="344" font-size="16" fill="#495057">Evals (make eval / make gate, CI)</text>
+<rect x="40" y="370" width="300" height="120" rx="12" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="190.0" y="416.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Golden sets</text>
+<text x="190.0" y="435.4" font-size="15" text-anchor="middle" fill="#1e1e1e">chat: retrieval, router, e2e</text>
+<text x="190.0" y="454.15" font-size="15" text-anchor="middle" fill="#1e1e1e">reviews: dev + held-out</text>
+<rect x="380" y="370" width="340" height="120" rx="12" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="550.0" y="407.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Suites</text>
+<text x="550.0" y="426.1" font-size="15" text-anchor="middle" fill="#1e1e1e">retrieval · router · e2e</text>
+<text x="550.0" y="444.85" font-size="15" text-anchor="middle" fill="#1e1e1e">reviews (scenarios, fake LLM,</text>
+<text x="550.0" y="463.6" font-size="15" text-anchor="middle" fill="#1e1e1e">output guards, concurrency)</text>
+<rect x="760" y="370" width="300" height="120" rx="12" fill="#e9ecef" stroke="#1e1e1e" stroke-width="2"/>
+<text x="910.0" y="416.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Release gates</text>
+<text x="910.0" y="435.4" font-size="15" text-anchor="middle" fill="#1e1e1e">evals/gates.json</text>
+<text x="910.0" y="454.15" font-size="15" text-anchor="middle" fill="#1e1e1e">zero-tolerance where it matters</text>
+<rect x="1100" y="370" width="360" height="120" rx="12" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1280.0" y="416.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Canary → promote or roll back</text>
+<text x="1280.0" y="435.4" font-size="15" text-anchor="middle" fill="#1e1e1e">CANARY_PERCENT pins sessions</text>
+<text x="1280.0" y="454.15" font-size="15" text-anchor="middle" fill="#1e1e1e">to a candidate agent</text>
+<line x1="340" y1="430" x2="380" y2="430" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="720" y1="430" x2="760" y2="430" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1060" y1="430" x2="1100" y2="430" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1290" y1="260" x2="190" y2="370" stroke="#e67700" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#a)"/>
+<text x="746.0" y="309.0" font-size="13" fill="#495057">label failures into the golden set</text>
+</svg>

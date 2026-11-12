@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 640" font-family="Helvetica, Arial, sans-serif">
+<title>Data stores</title>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>
+<rect width="1500" height="640" fill="#ffffff"/>
+<text x="30" y="46" font-size="28" font-weight="600" fill="#1e1e1e">Data stores</text>
+<text x="30" y="76" font-size="16" fill="#495057">One machine in the demo, the same boundaries as production</text>
+<rect x="20" y="100" width="1460" height="230" rx="14" fill="#c5f6fa" fill-opacity=".35" stroke="#c5f6fa"/>
+<text x="32" y="124" font-size="16" fill="#495057">Strongly consistent (store.Tx: one lock, WAL fsync before reply)</text>
+<rect x="40" y="150" width="420" height="150" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="250.0" y="193.05" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">WAL: data/wal.jsonl</text>
+<text x="250.0" y="211.8" font-size="15" text-anchor="middle" fill="#1e1e1e">orders · refunds · approvals · tickets</text>
+<text x="250.0" y="230.55" font-size="15" text-anchor="middle" fill="#1e1e1e">users · policies · product edits</text>
+<text x="250.0" y="249.3" font-size="15" text-anchor="middle" fill="#1e1e1e">reviews · cases · appeals · sanctions</text>
+<text x="250.0" y="268.05" font-size="15" text-anchor="middle" fill="#1e1e1e">identities · payouts · audit log</text>
+<rect x="520" y="150" width="420" height="150" rx="12" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="730.0" y="202.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">In-memory maps (one RWMutex)</text>
+<text x="730.0" y="221.1" font-size="15" text-anchor="middle" fill="#1e1e1e">Tx stages records, writes the WAL,</text>
+<text x="730.0" y="239.85" font-size="15" text-anchor="middle" fill="#1e1e1e">then applies; replay on start,</text>
+<text x="730.0" y="258.6" font-size="15" text-anchor="middle" fill="#1e1e1e">compaction to a snapshot</text>
+<rect x="1000" y="150" width="460" height="150" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1230.0" y="202.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Production: PostgreSQL</text>
+<text x="1230.0" y="221.1" font-size="15" text-anchor="middle" fill="#1e1e1e">row locks or SERIALIZABLE</text>
+<text x="1230.0" y="239.85" font-size="15" text-anchor="middle" fill="#1e1e1e">same Tx boundaries</text>
+<text x="1230.0" y="258.6" font-size="15" text-anchor="middle" fill="#1e1e1e">(one transaction per action)</text>
+<rect x="20" y="360" width="1460" height="250" rx="14" fill="#e9ecef" fill-opacity=".35" stroke="#e9ecef"/>
+<text x="32" y="384" font-size="16" fill="#495057">Other stores</text>
+<rect x="40" y="410" width="330" height="160" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="205.0" y="467.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Conversations</text>
+<text x="205.0" y="486.1" font-size="15" text-anchor="middle" fill="#1e1e1e">data/conversations/&lt;cid&gt;/&lt;sid&gt;.jsonl</text>
+<text x="205.0" y="504.85" font-size="15" text-anchor="middle" fill="#1e1e1e">fsync per message</text>
+<text x="205.0" y="523.6" font-size="15" text-anchor="middle" fill="#1e1e1e">(prod: DynamoDB / Mongo)</text>
+<rect x="400" y="410" width="330" height="160" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="565.0" y="476.65" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Telemetry + feedback</text>
+<text x="565.0" y="495.4" font-size="15" text-anchor="middle" fill="#1e1e1e">data/events.jsonl, no fsync</text>
+<text x="565.0" y="514.15" font-size="15" text-anchor="middle" fill="#1e1e1e">(prod: Loki / S3)</text>
+<rect x="760" y="410" width="330" height="160" rx="12" fill="#b2f2bb" stroke="#1e1e1e" stroke-width="2"/>
+<text x="925.0" y="467.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Search indexes</text>
+<text x="925.0" y="486.1" font-size="15" text-anchor="middle" fill="#1e1e1e">BM25 + vectors in memory</text>
+<text x="925.0" y="504.85" font-size="15" text-anchor="middle" fill="#1e1e1e">rebuilt and swapped on edit</text>
+<text x="925.0" y="523.6" font-size="15" text-anchor="middle" fill="#1e1e1e">(prod: OpenSearch / pgvector)</text>
+<rect x="1120" y="410" width="340" height="160" rx="12" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1290.0" y="467.35" font-size="15" font-weight="600" text-anchor="middle" fill="#1e1e1e">Photos + evals</text>
+<text x="1290.0" y="486.1" font-size="15" text-anchor="middle" fill="#1e1e1e">data/photos/&lt;cid&gt;/&lt;id&gt;.jpg</text>
+<text x="1290.0" y="504.85" font-size="15" text-anchor="middle" fill="#1e1e1e">data/evals/*.json</text>
+<text x="1290.0" y="523.6" font-size="15" text-anchor="middle" fill="#1e1e1e">golden_extra.jsonl</text>
+<line x1="460" y1="225" x2="520" y2="225" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<text x="496.0" y="219.0" font-size="13" fill="#495057">replay</text>
+<line x1="940" y1="225" x2="1000" y2="225" stroke="#1e1e1e" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#a)"/>
+<text x="976.0" y="219.0" font-size="13" fill="#495057">swap</text>
+</svg>
