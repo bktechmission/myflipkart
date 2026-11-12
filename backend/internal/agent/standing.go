@@ -129,7 +129,7 @@ func (t *Tools) Sellers() []SellerStanding {
 		return by[name]
 	}
 	for _, p := range t.S.Products() {
-		name := seed.SellerFor(p.Category)
+		name := seed.SellerOf(p)
 		sellerOf[p.ID] = name
 		s := get(name)
 		s.Products++

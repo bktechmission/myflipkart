@@ -33,12 +33,15 @@ type Order struct {
 	CustomerID string `json:"customer_id"`
 	// Lifecycle: placed -> shipped -> delivered -> (return_requested -> return_received -> refunded)
 	// or (replacement_requested, with a new $0 replacement order). on_hold = waiting for a teammate.
-	Status      string   `json:"status"`
-	PlacedOn    string   `json:"placed_on"`
-	DeliveredOn string   `json:"delivered_on,omitempty"`
-	Items       []string `json:"items"`
-	Total       float64  `json:"total"`
-	RMA         string   `json:"rma,omitempty"`
+	Status      string `json:"status"`
+	PlacedOn    string `json:"placed_on"`
+	DeliveredOn string `json:"delivered_on,omitempty"`
+	// DeliveredAt is the exact delivery time when the courier reports it (ReviewGuard's
+	// "too fast" check); older orders only have the date.
+	DeliveredAt time.Time `json:"delivered_at,omitempty"`
+	Items       []string  `json:"items"`
+	Total       float64   `json:"total"`
+	RMA         string    `json:"rma,omitempty"`
 	// RefundOnReceipt: the customer asked for a refund; it is released only when the
 	// returned item reaches the warehouse (we never refund an item that wasn't returned).
 	RefundOnReceipt bool      `json:"refund_on_receipt,omitempty"`

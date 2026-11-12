@@ -226,7 +226,7 @@ func IsSellerIssue(s string) bool { return sellerRe.MatchString(s) }
 
 func (t *Tools) card(id string, h *search.Hit) Card {
 	p, _ := t.R.Product(id)
-	return Card{p.ID, p.Name, p.Category, p.Price, p.Rating, p.Stock, seed.SellerFor(p.Category), p.Features, h}
+	return Card{p.ID, p.Name, p.Category, p.Price, p.Rating, p.Stock, seed.SellerOf(p), p.Features, h}
 }
 
 func (t *Tools) view(o model.Order) *OrderView {
@@ -759,7 +759,7 @@ func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) To
 			return nil
 		}
 		cat = p.Category
-		if seller := seed.SellerFor(p.Category); bad[seller] {
+		if seller := seed.SellerOf(p); bad[seller] {
 			res = ToolResult{Message: fmt.Sprintf("Sorry, we've paused sales from %s while we review quality complaints, so I can't order %s right now.", seller, p.Name),
 				Guardrail: "seller_suspended"}
 			return nil
@@ -808,7 +808,7 @@ func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) To
 		if !commit {
 			res.NeedsConfirm = true
 			res.Message = fmt.Sprintf("order %d × %s (%s) from %s: $%.2f + %s = $%.2f, charged to your card on file ending 4242 (demo), arriving in 3-5 business days",
-				qty, p.Name, pid, seed.SellerFor(p.Category), sub, shipTxt, total)
+				qty, p.Name, pid, seed.SellerOf(p), sub, shipTxt, total)
 			if why != "" {
 				res.Message += ". Because " + why + ", it ships after that review and you're only charged once it's approved"
 			}
@@ -844,7 +844,7 @@ func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) To
 		} else {
 			res.Committed = true
 			res.Message = fmt.Sprintf("Order %s is placed: %d × %s, $%.2f total. It ships from %s and arrives in 3-5 business days. You can cancel it any time before it ships.",
-				id, qty, p.Name, total, seed.SellerFor(p.Category))
+				id, qty, p.Name, total, seed.SellerOf(p))
 		}
 		return nil
 	})

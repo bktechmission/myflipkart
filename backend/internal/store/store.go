@@ -45,6 +45,7 @@ type Store struct {
 	refunds   map[string]model.Refund // by order id: one refund per order (idempotency)
 	approvals map[string]model.Approval
 	tickets   map[string]model.Ticket // by id (updated in place as status changes)
+	rv        *reviewState            // ReviewGuard: reviews, cases, appeals, audit (reviews.go)
 	wal       *os.File
 
 	evMu     sync.Mutex
@@ -65,6 +66,15 @@ type rec struct {
 	Ticket   *model.Ticket    `json:"ticket,omitempty"`
 	Policy   *model.PolicyDoc `json:"policy,omitempty"`
 	Product  *model.Product   `json:"product,omitempty"`
+	// ReviewGuard records (reviews.go)
+	Review   *model.Review             `json:"review,omitempty"`
+	RCase    *model.ReviewCase         `json:"rv_case,omitempty"`
+	Appeal   *model.Appeal             `json:"appeal,omitempty"`
+	Sanction *model.Sanction           `json:"sanction,omitempty"`
+	Identity *model.Identity           `json:"identity,omitempty"`
+	Payout   *model.Payout             `json:"payout,omitempty"`
+	PState   *model.ProductReviewState `json:"pstate,omitempty"`
+	Audit    *model.AuditEntry         `json:"audit,omitempty"`
 }
 
 var sidRe = regexp.MustCompile(`^[a-f0-9]{8,32}$`)
@@ -74,7 +84,7 @@ var cidRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 func Open(dir, demoOrdersFor string) (*Store, error) {
 	s := &Store{dir: dir, products: map[string]model.Product{}, users: map[string]model.User{},
 		orders: map[string]model.Order{}, refunds: map[string]model.Refund{}, approvals: map[string]model.Approval{},
-		tickets:  map[string]model.Ticket{},
+		tickets: map[string]model.Ticket{}, rv: newReviewState(),
 		policies: map[string]model.PolicyDoc{}}
 	for _, p := range seed.Products() {
 		s.products[p.ID] = p
@@ -164,6 +174,9 @@ func (s *Store) writeSnapshot(path string) error {
 			enc.Encode(rec{Kind: "policy", Policy: &p})
 		}
 	}
+	for _, r := range s.rv.snapshot() {
+		enc.Encode(r)
+	}
 	for _, p := range s.products { // persist edited products only
 		if orig, _ := seedProduct(p.ID); orig.Description != p.Description || len(orig.Features) != len(p.Features) || orig.Price != p.Price {
 			p := p
@@ -226,6 +239,10 @@ func (s *Store) apply(r rec) {
 		s.policies[r.Policy.ID] = *r.Policy
 	case "product":
 		s.products[r.Product.ID] = *r.Product
+	case "order_delete":
+		delete(s.orders, r.Order.ID)
+	default:
+		s.rv.apply(r)
 	}
 }
 
@@ -397,6 +414,7 @@ func (s *Store) ResetOrders(demoOrdersFor string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.orders, s.refunds, s.approvals, s.tickets = map[string]model.Order{}, map[string]model.Refund{}, map[string]model.Approval{}, map[string]model.Ticket{}
+	s.rv.apply(rec{Kind: "rv_reset"}) // reviews refer to orders: reset them together (the audit log stays)
 	extra := ""
 	if demoOrdersFor != "" {
 		if u := s.userByEmailLocked(demoOrdersFor); u != nil {
@@ -558,7 +576,11 @@ func (s *Store) LoginUser(provider, sub, email, name, picture string) (model.Use
 	err := s.Tx(func(t *Txn) error {
 		u := s.userByEmailLocked(email)
 		if u == nil {
-			u = &model.User{CustomerID: fmt.Sprintf("C%d", 3000+len(s.users)), Email: email, CreatedAt: time.Now().UTC()}
+			n := 3000 + len(s.users)
+			for s.users[fmt.Sprintf("C%d", n)].CustomerID != "" { // never reuse an id
+				n++
+			}
+			u = &model.User{CustomerID: fmt.Sprintf("C%d", n), Email: email, CreatedAt: time.Now().UTC()}
 		}
 		u.Provider, u.Subject = provider, sub
 		if name != "" {

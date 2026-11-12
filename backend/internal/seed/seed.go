@@ -228,7 +228,19 @@ var sellers = map[string]string{
 	"backpacks": "TrailGear Co.", "monitors": "PixelDepot",
 }
 
-// SellerFor names the marketplace seller for a product category.
+// brandSellers: brands sold by their own marketplace seller instead of the category's
+// main one (gives ReviewGuard's demo two competing headphone sellers).
+var brandSellers = map[string]string{"Quietude": "SoundNest Store"}
+
+// SellerOf names the marketplace seller of a product.
+func SellerOf(p model.Product) string {
+	if s, ok := brandSellers[p.Brand]; ok {
+		return s
+	}
+	return SellerFor(p.Category)
+}
+
+// SellerFor names the main marketplace seller for a product category.
 func SellerFor(category string) string {
 	if s, ok := sellers[category]; ok {
 		return s

@@ -588,7 +588,7 @@ func (h *Hub) resolve(t model.Ticket, cs *caseState, text string) {
 			seller := ""
 			if len(o.Items) > 0 {
 				if p, ok := h.S.Product(o.Items[0]); ok {
-					seller = agentSeller(p.Category)
+					seller = seed.SellerOf(p)
 				}
 			}
 			k, _ := h.Tools.OpenCase(t.CustomerID, t.SessionID, o.ID, "seller_complaint", fmt.Sprintf("Seller complaint · %s · %s: %s", o.ID, seller, text), false)
@@ -747,8 +747,6 @@ func first(name string) string {
 	}
 	return name
 }
-
-func agentSeller(category string) string { return seed.SellerFor(category) }
 
 // canSettleClaim: a teammate may settle a missing-item claim on the spot only for a
 // first claim, up to $150, from a loyal customer or for a small order. Everything
