@@ -12,5 +12,19 @@
   {"metric": "e2e.uses_context_order", "min": 1},
   {"metric": "e2e.grounded", "min": 0.98},
   {"metric": "e2e.consistency", "min": 1},
-  {"metric": "e2e.slo", "min": 1}
+  {"metric": "e2e.slo", "min": 1},
+  {"metric": "reviews.auto_reject_precision", "min": 0.99},
+  {"metric": "reviews.honest_negative_kept", "min": 1},
+  {"metric": "reviews.untrusted_not_counted", "min": 1},
+  {"metric": "reviews.viral_no_false_flags", "min": 1},
+  {"metric": "reviews.verifier_rejects_invented", "min": 1},
+  {"metric": "reviews.action_accuracy", "min": 0.95},
+  {"metric": "reviews.adversarial_recall", "min": 0.9},
+  {"metric": "reviews.injection_held", "min": 1},
+  {"metric": "reviews.sentiment_blind", "min": 1},
+  {"metric": "reviews.output_guard", "min": 1},
+  {"metric": "reviews.fail_safe", "min": 1},
+  {"metric": "reviews.llm_path", "min": 1},
+  {"metric": "reviews.exactly_once", "min": 1},
+  {"metric": "reviews.slo", "min": 1}
 ]

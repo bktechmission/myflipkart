@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	suite := flag.String("suite", "all", "all | retrieval | router | e2e")
+	suite := flag.String("suite", "all", "all | retrieval | router | e2e | reviews")
 	router := flag.String("router", "", "rules | llm | auto (default: ROUTER env)")
 	label := flag.String("label", "cli", "label shown in run history")
 	gate := flag.Bool("gate", false, "exit non-zero if any release gate fails (use in CI before rollout)")
@@ -147,6 +147,36 @@ func report(r *evals.Result) {
 				}
 			}
 			fmt.Printf("  x [%s as %s] %q failed %v -> %q\n", f.Type, f.As, f.Query, bad, trunc(f.Answer, 90))
+		}
+	}
+	if rv := r.Reviews; rv != nil {
+		fmt.Printf("\nREVIEWGUARD (%s tagger, policy %s, %d golden cases)\n", rv.Tagger, rv.Policy, rv.N)
+		var keys []string
+		for k := range rv.Rates {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Printf("  %-28s %.4f\n", k, rv.Rates[k])
+		}
+		fmt.Printf("  %-8s %10s %8s %8s\n", "rule", "precision", "recall", "support")
+		var rules []string
+		for k := range rv.PerRule {
+			rules = append(rules, k)
+		}
+		sort.Strings(rules)
+		for _, k := range rules {
+			c := rv.PerRule[k]
+			fmt.Printf("  %-8s %10.3f %8.3f %8d\n", k, c.Precision, c.Recall, c.Support)
+		}
+		for l, m := range rv.PerLang {
+			fmt.Printf("  language %-9s accuracy=%.3f n=%v\n", l, m["accuracy"], m["n"])
+		}
+		for path, m := range rv.LatencyMS {
+			fmt.Printf("  latency %-6s n=%v p95=%vms (target %vms)\n", path, m["n"], m["p95"], m["target_p95"])
+		}
+		for _, f := range rv.Failures {
+			fmt.Printf("  x [%s/%s] %q expected %s got %s (rules %v, want %v)\n", f.Set, f.Lang, trunc(f.Text, 60), f.Expect, f.Got, f.Rules, f.Want)
 		}
 	}
 	fmt.Printf("\nsaved data/evals/latest.json (%.1fs)\n", r.DurationS)

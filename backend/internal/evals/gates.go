@@ -107,6 +107,12 @@ func metric(r *Result, name string) (float64, bool) {
 		}
 		v, ok := r.E2E.Rates[b]
 		return v, ok
+	case "reviews":
+		if r.Reviews == nil {
+			return 0, false
+		}
+		v, ok := r.Reviews.Rates[b]
+		return v, ok
 	}
 	return 0, false
 }

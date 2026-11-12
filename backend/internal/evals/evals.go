@@ -25,12 +25,13 @@ import (
 	"asksauby/internal/agent"
 	"asksauby/internal/config"
 	"asksauby/internal/llm"
+	"asksauby/internal/reviews"
 	"asksauby/internal/search"
 	"asksauby/internal/seed"
 	"asksauby/internal/store"
 )
 
-var AllSuites = []string{"retrieval", "router", "e2e"}
+var AllSuites = []string{"retrieval", "router", "e2e", "reviews"}
 
 const K = 5
 
@@ -54,6 +55,7 @@ type Result struct {
 	RetrievalOrder []string                 `json:"retrieval_order,omitempty"`
 	Router         *RouterResult            `json:"router,omitempty"`
 	E2E            *E2EResult               `json:"e2e,omitempty"`
+	Reviews        *reviews.EvalResult      `json:"reviews,omitempty"` // ReviewGuard (offline: rule tagger + scripted fake LLM)
 	Gate           *GateResult              `json:"gate,omitempty"`
 	DurationS      float64                  `json:"duration_s"`
 }
@@ -636,6 +638,8 @@ func Run(o Options) (*Result, error) {
 				return nil, err
 			}
 			res.E2E = e
+		case "reviews":
+			res.Reviews = reviews.RunEval(context.Background())
 		}
 	}
 	res.Gate = CheckGates(o.Cfg.EvalGates, res)
@@ -661,6 +665,9 @@ func save(dataDir string, r *Result) error {
 		if latest.E2E == nil {
 			latest.E2E = prev.E2E
 		}
+		if latest.Reviews == nil {
+			latest.Reviews = prev.Reviews
+		}
 	}
 	lb, _ := json.MarshalIndent(latest, "", " ")
 	if err := os.WriteFile(filepath.Join(d, "latest.json"), lb, 0o600); err != nil {
@@ -679,6 +686,9 @@ func save(dataDir string, r *Result) error {
 	}
 	if r.E2E != nil {
 		sum["e2e"] = r.E2E.Rates
+	}
+	if r.Reviews != nil {
+		sum["reviews"] = r.Reviews.Rates
 	}
 	if r.Gate != nil {
 		sum["gate_pass"] = r.Gate.Pass
