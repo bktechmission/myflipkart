@@ -18,8 +18,9 @@ type Config struct {
 	DataDir   string
 	WebDir    string
 
-	SessionSecret string
-	AdminEmails   map[string]bool
+	SessionSecret  string
+	AdminEmails    map[string]bool
+	SellerAccounts map[string]string // email -> marketplace seller (role "seller"; ReviewGuard)
 
 	// Google OIDC (real). Empty client ID disables the button.
 	GoogleClientID     string
@@ -86,6 +87,12 @@ func Load() Config {
 			admins[e] = true
 		}
 	}
+	sellers := map[string]string{}
+	for _, kv := range strings.Split(env("SELLER_ACCOUNTS", "seller@example.com=SoundNest Store"), ",") {
+		if e, name, ok := strings.Cut(kv, "="); ok && strings.TrimSpace(e) != "" && strings.TrimSpace(name) != "" {
+			sellers[strings.ToLower(strings.TrimSpace(e))] = strings.TrimSpace(name)
+		}
+	}
 	c := Config{
 		Addr:               env("ADDR", portAddr()),                                            // ADDR, else :$PORT (Render, Cloud Run), else :8080
 		PublicURL:          strings.TrimRight(env("PUBLIC_URL", "http://localhost:8080"), "/"), // "auto" = from each request
@@ -93,6 +100,7 @@ func Load() Config {
 		WebDir:             env("WEB_DIR", "../web/public"),
 		SessionSecret:      os.Getenv("SESSION_SECRET"), // empty -> random per process (see Load)
 		AdminEmails:        admins,
+		SellerAccounts:     sellers,
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		MockIssuer:         strings.TrimRight(env("MOCK_IDP_ISSUER", "http://localhost:9000"), "/"),

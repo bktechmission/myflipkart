@@ -8,6 +8,7 @@ package reviews
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -243,7 +244,7 @@ func TestEvalGatesPass(t *testing.T) {
 	r := RunEval(context.Background())
 	for k, v := range r.Rates {
 		min := 1.0
-		switch k {
+		switch strings.TrimPrefix(k, "heldout_") {
 		case "action_accuracy":
 			min = 0.95
 		case "adversarial_recall":
@@ -270,5 +271,40 @@ func TestEvalGatesPass(t *testing.T) {
 	}
 	if r.Policy != DefaultPolicy().Version {
 		t.Error(fmt.Sprint("eval ran on policy ", r.Policy))
+	}
+}
+
+func TestBurstPausesTheRatingButNeverHidesAnHonestReview(t *testing.T) {
+	s := mustStore()
+	g := New(s, nil, "rules")
+	ctx := context.Background()
+	if _, err := g.Simulate(ctx, "fake5", "test"); err != nil {
+		t.Fatal(err)
+	}
+	before := g.Rating(FakeProduct)
+	r, _, err := submit(g, "C1002", "O5106", FakeProduct, 1, "Left cup creaks and the noise cancelling is weak. Disappointed.", "key-00000099")
+	if err != nil || r.Status != "published" || r.Counted || r.Action != "not_counted" {
+		t.Fatalf("honest review during a burst: %s counted=%v action=%s %v", r.Status, r.Counted, r.Action, err)
+	}
+	if after := g.Rating(FakeProduct); after.Shown != before.Shown || !after.Paused {
+		t.Fatalf("rating moved during the pause: %+v -> %+v", before, after)
+	}
+	var burst model.ReviewCase
+	for _, c := range s.ReviewCases() {
+		if c.Kind == "burst" {
+			burst = c
+		}
+	}
+	mod := Moderator{Email: "mod@example.com", Kind: "human"}
+	if _, err := g.DecideCase(burst.ID, DemoModerator, "dismiss", "demo tries", []string{"rating_freeze"}); err != ErrNoSanctions {
+		t.Errorf("a simulated moderator applied a sanction: %v", err)
+	}
+	if _, err := g.DecideCase(burst.ID, mod, "dismiss", "the fakes are handled in their own case", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Review(r.ID)
+	rt := g.Rating(FakeProduct)
+	if !got.Counted || rt.Paused || rt.N != before.N+1 {
+		t.Fatalf("after the person cleared the burst: counted=%v rating %+v", got.Counted, rt)
 	}
 }

@@ -130,7 +130,7 @@ type Session struct {
 	Email    string `json:"email"`
 	Name     string `json:"name"`
 	Picture  string `json:"pic,omitempty"`
-	Role     string `json:"role"` // customer | admin | guest
+	Role     string `json:"role"` // customer | admin | seller | guest
 	Provider string `json:"prov"`
 	Exp      int64  `json:"exp"`
 	ID       string `json:"jti"` // session id for rate limiting / revocation

@@ -334,7 +334,7 @@ func (t *Tools) search(q string, lo, hi *float64) ToolResult {
 	res := ToolResult{Retrieval: &info}
 	bad := t.suspendedSellers() // keep suspended sellers out of results
 	for i := range hits {
-		if c := t.card(hits[i].ID, &hits[i]); !bad[c.Seller] {
+		if c := t.card(hits[i].ID, &hits[i]); !bad[c.Seller] && !t.S.Delisted(c.ID) { // delisted by a moderator (ReviewGuard)
 			res.Products = append(res.Products, c)
 		}
 	}
@@ -759,7 +759,7 @@ func (t *Tools) placeOrder(pid string, qty int, cid, sid string, commit bool) To
 			return nil
 		}
 		cat = p.Category
-		if seller := seed.SellerOf(p); bad[seller] {
+		if seller := seed.SellerOf(p); bad[seller] || t.S.DelistedLocked(pid) {
 			res = ToolResult{Message: fmt.Sprintf("Sorry, we've paused sales from %s while we review quality complaints, so I can't order %s right now.", seller, p.Name),
 				Guardrail: "seller_suspended"}
 			return nil

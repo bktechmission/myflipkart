@@ -1,0 +1,4 @@
+{
+  "note": "Held-out ReviewGuard cases, written independently without seeing the rules. Same format as golden.json (dev split). Empty until the held-out set is added; once it has cases, its gates (reviews.heldout_*) apply.",
+  "cases": []
+}

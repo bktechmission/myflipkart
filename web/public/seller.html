@@ -1,0 +1,28 @@
+<!doctype html>
+<!--
+  Ask Sauby · MyFlipKart.com — seller view of reviews (ReviewGuard)
+  Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your reviews · MyFlipKart.com sellers</title>
+<script src="/dist/theme.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="row" style="justify-content:space-between">
+    <div class="brand"><span class="mark">S</span><span id="sellerName">Seller</span></div>
+    <div class="row"><a class="btn ghost sm" href="/"><span data-icon="chat"></span>Store</a>
+      <button class="iconbtn" id="theme" aria-label="Switch theme"></button>
+      <form method="post" action="/auth/logout"><button class="iconbtn" data-icon="logout" title="Sign out" aria-label="Sign out"></button></form></div>
+  </header>
+  <p class="demo-note">Demo seller account (synthetic). Reviews are shown in general terms: MyFlipKart never shares who wrote a review.</p>
+  <div class="g k4" id="sellerKpis"></div>
+  <div id="sellerProducts" class="g" style="margin-top:12px"></div>
+</div>
+<script type="module" src="/dist/seller.js"></script>
+</body>
+</html>

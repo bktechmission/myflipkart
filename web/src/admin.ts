@@ -8,6 +8,7 @@
  * confusion matrix, release gates) and Knowledge (edit docs, live re-index).
  */
 import { $, api, bars, esc, f3, heat, money, pct, paintIcons, themeButton } from "./lib.js";
+import { initReviews, loadReviews } from "./admin_reviews.js";
 
 const TOOLS = ["search_products", "price_search", "get_product", "get_order", "cancel_order", "return_order",
   "request_refund", "policy_search", "handoff", "chitchat"];
@@ -24,7 +25,7 @@ const table = (head: string[], rows: string[][]) =>
 document.querySelectorAll<HTMLElement>(".tab").forEach((b) => b.addEventListener("click", () => {
   current = b.dataset.t!;
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("on", x === b));
-  for (const t of ["ops", "biz", "live", "approvals", "insights", "evals", "knowledge"]) $("#t-" + t).classList.toggle("hide", t !== current);
+  for (const t of ["ops", "biz", "live", "approvals", "reviews", "insights", "evals", "knowledge"]) $("#t-" + t).classList.toggle("hide", t !== current);
   load();
 }));
 
@@ -32,6 +33,7 @@ async function load(): Promise<void> {
   if (current === "ops" || current === "biz") await loadMetrics();
   if (current === "approvals") await loadApprovals();
   if (current === "live") await loadLive();
+  if (current === "reviews") await loadReviews();
   if (current === "insights") await loadInsights();
   if (current === "evals") await loadEvals();
   if (current === "knowledge") await loadKnowledge();
@@ -370,5 +372,6 @@ $("#liveForm").addEventListener("submit", async (e) => {
 
 paintIcons();
 themeButton($("#theme"));
+initReviews();
 load();
 setInterval(() => { if (current === "ops" || current === "biz") loadMetrics().catch(() => {}); }, 10000);

@@ -26,5 +26,10 @@
   {"metric": "reviews.fail_safe", "min": 1},
   {"metric": "reviews.llm_path", "min": 1},
   {"metric": "reviews.exactly_once", "min": 1},
-  {"metric": "reviews.slo", "min": 1}
+  {"metric": "reviews.slo", "min": 1},
+  {"metric": "reviews.heldout_auto_reject_precision", "min": 0.99},
+  {"metric": "reviews.heldout_honest_negative_kept", "min": 1},
+  {"metric": "reviews.heldout_action_accuracy", "min": 0.9},
+  {"metric": "reviews.heldout_injection_held", "min": 1},
+  {"metric": "reviews.heldout_sentiment_blind", "min": 1}
 ]

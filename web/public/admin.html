@@ -27,6 +27,7 @@
     <button class="tab" data-t="biz"><span data-icon="up"></span>Business</button>
     <button class="tab" data-t="live"><span data-icon="headset"></span>Live chats <span id="liveBadge" class="pill hide"></span></button>
     <button class="tab" data-t="approvals"><span data-icon="refund"></span>Approvals <span id="pendingBadge" class="pill hide"></span></button>
+    <button class="tab" data-t="reviews"><span data-icon="star"></span>Reviews <span id="rvBadge" class="pill hide"></span></button>
     <button class="tab" data-t="insights"><span data-icon="bulb"></span>Insights</button>
     <button class="tab" data-t="evals"><span data-icon="flask"></span>Evals</button>
     <button class="tab" data-t="knowledge"><span data-icon="book"></span>Knowledge</button>
@@ -82,6 +83,31 @@
     </div>
   </section>
 
+  <section id="t-reviews" class="hide">
+    <div class="card sim-bar"><div class="row" style="justify-content:space-between"><h3>Demo · simulation with synthetic data</h3><span class="pill">synthetic</span></div>
+      <p class="note">Each button creates made-up shoppers, orders, devices and payments and sends their reviews through the real ReviewGuard pipeline. Nothing here is a real person or brand; placeholder words stand in for slurs.</p>
+      <div class="row" id="rvSim"></div><p class="muted" id="rvSimOut" style="margin-top:8px"></p></div>
+    <div class="g k4" id="rvKpis" style="margin-top:12px"></div>
+    <p class="muted" id="rvVersions" style="font-size:12.5px;margin:6px 2px 0"></p>
+    <div class="rvgrid" style="margin-top:12px">
+      <div class="card"><h3>Moderation queue</h3><p class="note">Ordered by severity, then reach (reviews involved and how far they'd move the rating). Related reviews are grouped into one case.</p><div id="rvQueue"></div></div>
+      <div class="card" id="rvCase"></div>
+    </div>
+    <div class="card" style="margin-top:12px"><h3>Appeals (a second moderator decides)</h3><div class="scroll"><table id="rvAppeals"></table></div></div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Ratings: trusted vs naive</h3><p class="note">Shown = Bayesian average of verified, trusted reviews pulled toward the category mean. Naive = plain average of everything submitted.</p><div class="scroll"><table id="rvRatings"></table></div></div>
+      <div class="card"><h3>Precision and recall per rule</h3><div class="scroll"><table id="rvRules"></table></div></div>
+    </div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>ReviewGuard evals</h3><div id="rvEval"></div></div>
+      <div class="card"><h3>Recent reviews</h3><div class="scroll"><table id="rvRecent"></table></div></div>
+    </div>
+    <div class="g c2" style="margin-top:12px">
+      <div class="card"><h3>Audit log</h3><p class="note">Every engine and moderator decision, with tagger, model, prompt and policy versions.</p><div class="scroll"><table id="rvAudit"></table></div></div>
+      <div class="card"><h3>Decided cases</h3><div class="scroll"><table id="rvDecided"></table></div></div>
+    </div>
+  </section>
+
   <section id="t-insights" class="hide">
     <div class="card"><h3>What to fix next (last 7 days)</h3><ul id="actions" style="margin:0;padding-left:18px"></ul></div>
     <div class="card" style="margin-top:12px"><h3>Continuous improvement loop</h3>
@@ -99,7 +125,7 @@
 
   <section id="t-evals" class="hide">
     <div class="card row"><strong>Run evals</strong>
-      <select class="inp" id="suite"><option value="all">all suites</option><option>retrieval</option><option>router</option><option>e2e</option></select>
+      <select class="inp" id="suite"><option value="all">all suites</option><option>retrieval</option><option>router</option><option>e2e</option><option>reviews</option></select>
       <select class="inp" id="router"><option value="">router: server default</option><option value="rules">rules</option><option value="llm">llm (gateway)</option></select>
       <input class="inp" id="label" placeholder="label, e.g. POLICY_K=5">
       <button class="btn" id="run">Run</button><span id="estate" class="muted"></span></div>

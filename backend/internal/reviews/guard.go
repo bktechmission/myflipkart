@@ -451,7 +451,11 @@ func (g *Guard) Reassess(ctx context.Context, id, why string) (model.Review, boo
 	auth.Signals = authSigs
 	d := Decide(DecideInput{Auth: auth}, g.P)
 	worse := (r.Counted && !d.Counted) || (r.Status == "published" && d.Status == "held")
-	if !worse {
+	newEvidence := false // a held review still gains the new evidence for the moderator
+	for _, s := range auth.Signals {
+		newEvidence = newEvidence || !hasSignal(r.Signals, s.Name)
+	}
+	if !worse && !(r.Status == "held" && newEvidence) {
 		return r, false, nil
 	}
 	var out model.Review
@@ -483,7 +487,7 @@ func (g *Guard) Reassess(ctx context.Context, id, why string) (model.Review, boo
 		if cur.Status == "published" && cur.Action != "reject" {
 			cur.Action = "not_counted"
 		}
-		if d.Status == "held" {
+		if d.Status == "held" && cur.Status != "held" {
 			cur.Status, cur.Action, cur.Suggested, cur.Shown = "held", "hold", d.Suggested, ""
 			if auth.Burst {
 				g.startBurst(tx, cur, Analysis{Auth: auth})

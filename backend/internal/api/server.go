@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"log"
 	"net"
 	"net/http"
@@ -32,6 +31,7 @@ import (
 	"asksauby/internal/mockid"
 	"asksauby/internal/model"
 	"asksauby/internal/obs"
+	"asksauby/internal/reviews"
 	"asksauby/internal/search"
 	"asksauby/internal/store"
 )
@@ -46,7 +46,9 @@ type Server struct {
 	agent     *agent.Agent // control
 	canary    *agent.Agent // optional candidate agent for a % of sessions
 	tools     *agent.Tools
-	Hub       *live.Hub // human handoff: queue, agent console, simulated teammates
+	rg        *reviews.Guard // ReviewGuard
+	rvLimit   *TokenBucket   // review submits per customer
+	Hub       *live.Hub      // human handoff: queue, agent console, simulated teammates
 	signer    auth.Signer
 	providers map[string]*auth.Provider
 	provMu    sync.Mutex
@@ -68,6 +70,14 @@ func New(cfg config.Config, st *store.Store, r *search.Retriever, gw, canaryGW *
 	tools := &agent.Tools{S: st, R: r, ReturnWindow: cfg.ReturnWindowDays,
 		AutoRefundLimit: cfg.AutoRefundLimit, MaxAutoRefunds: cfg.MaxAutoRefunds}
 	s.tools = tools
+	s.rg = reviews.New(st, nil, cfg.Router)
+	if gw != nil { // a nil *Gateway must not become a non-nil interface
+		s.rg.GW = gw
+	}
+	s.rvLimit = NewTokenBucket(8, 8)                    // per customer: generous for people, a wall for floods
+	if n := s.rg.Recover(context.Background()); n > 0 { // finish reviews a crash left pending
+		log.Printf("ReviewGuard: recovered %d pending review(s)", n)
+	}
 	s.agent = agent.New(tools, st, gw, cfg.Router, "chat")
 	s.agent.Variant = "control"
 	s.Hub = &live.Hub{S: st, Tools: tools, Sim: cfg.SimAgents, JoinAfter: time.Duration(cfg.SimJoinAfterSec * float64(time.Second)),
@@ -158,6 +168,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/admin/transcripts/{cid}/{sid}", s.withAuth(s.transcript, true))
 	m.HandleFunc("POST /api/admin/golden", s.withAuth(s.addGolden, true))
 	m.HandleFunc("GET /api/admin/search", s.withAuth(s.searchProbe, true))
+	s.reviewRoutes(m)
 	m.HandleFunc("GET /api/admin/live", s.withAuth(s.liveQueue, true))
 	m.HandleFunc("POST /api/admin/live/{id}/join", s.withAuth(s.liveJoin, true))
 	m.HandleFunc("POST /api/admin/live/{id}/message", s.withAuth(s.liveSend, true))
@@ -381,6 +392,9 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	role := "customer"
+	if s.cfg.SellerAccounts[strings.ToLower(u.Email)] != "" {
+		role = "seller"
+	}
 	if s.cfg.AdminEmails[u.Email] {
 		role = "admin"
 	}
@@ -609,35 +623,6 @@ func (s *Server) health() map[string]any {
 		h["canary"] = map[string]any{"percent": s.cfg.CanaryPercent, "router": s.canary.RouterName(), "model": s.canary.GW.Internal.Model}
 	}
 	return h
-}
-
-// productTmpl is the server-rendered product page (good for SEO and link previews).
-var productTmpl = template.Must(template.New("p").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.P.Name}} · MyFlipKart.com</title>
-<link rel="stylesheet" href="/static/style.css"><script src="/dist/theme.js"></script></head><body>
-<main class="pp"><a class="back" href="/#shop">&larr; Shop</a>
-<div class="pp-grid"><img class="pp-img" src="/img/{{.P.ID}}.svg" alt="{{.P.Name}}">
-<div><p class="muted">{{.P.Brand}} · {{.P.Category}}</p><h1>{{.P.Name}}</h1>
-<div class="pp-price">${{printf "%.0f" .P.Price}}</div>
-<p class="muted">★ {{.P.Rating}} · {{if .P.Stock}}In stock{{else}}Out of stock{{end}} · {{.P.ID}}</p>
-<p>{{.P.Description}}</p><ul class="feat">{{range .P.Features}}<li>{{.}}</li>{{end}}</ul>
-<a class="btn" href="/?ask={{.P.ID}}">Ask Sauby about this</a></div></div>
-<h3>Returns &amp; warranty</h3>{{range .Policies}}<details><summary>{{.Title}}</summary>{{range .Paras}}<p>{{.}}</p>{{end}}</details>{{end}}
-</main></body></html>`))
-
-func (s *Server) productPage(w http.ResponseWriter, r *http.Request) {
-	p, ok := s.store.Product(strings.ToUpper(r.PathValue("id")))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	var pols []model.PolicyDoc
-	for _, d := range s.store.Policies() {
-		if d.ID == "returns" || d.ID == "refunds" || d.ID == "warranty" {
-			pols = append(pols, d)
-		}
-	}
-	productTmpl.Execute(w, map[string]any{"P": p, "Policies": pols})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

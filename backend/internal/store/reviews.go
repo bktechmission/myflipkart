@@ -391,6 +391,16 @@ func (s *Store) Delisted(pid string) bool {
 	return false
 }
 
+// DelistedLocked is Delisted for callers already inside a transaction.
+func (s *Store) DelistedLocked(pid string) bool {
+	for _, x := range s.rv.sanctions {
+		if x.Kind == "delist" && x.Target == pid && !x.Lifted {
+			return true
+		}
+	}
+	return false
+}
+
 // SellerStrikes counts active review-fraud strikes a person gave a seller.
 func (s *Store) SellerStrikes(seller string) int {
 	s.mu.RLock()

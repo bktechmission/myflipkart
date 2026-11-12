@@ -131,22 +131,29 @@ func Decide(in DecideInput, p *Policy) Decision {
 	}
 
 	// 3. authenticity: behaviour decides whether the review counts
+	// A burst alone doesn't hide anyone's review: it's shown but not counted while
+	// the rating is paused, and a person decides when the pause ends.
 	strong, medium, weak := 0, 0, 0
 	for _, s := range in.Auth.Signals {
-		switch s.Strength {
-		case "strong":
+		switch {
+		case s.Name == "burst":
+		case s.Strength == "strong":
 			strong++
-		case "medium":
+		case s.Strength == "medium":
 			medium++
-		case "weak":
+		case s.Strength == "weak":
 			weak++
 		}
 	}
-	authHold := strong > 0 || medium >= 2 || (medium >= 1 && weak >= 1) || in.Auth.Burst
-	counted := in.Auth.Verified && strong == 0 && medium == 0
+	authHold := strong > 0 || medium >= 2 || (medium >= 1 && weak >= 1)
+	counted := in.Auth.Verified && strong == 0 && medium == 0 && !in.Auth.Burst
 	for _, s := range in.Auth.Signals {
 		if s.Strength == "weak" && !authHold {
 			continue // a weak signal alone is only a note
+		}
+		if s.Name == "burst" && !authHold {
+			cite(s.Rule, "shown, but not counted while the rating is paused for a review burst")
+			continue
 		}
 		cite(s.Rule, s.Detail)
 	}
@@ -162,8 +169,6 @@ func Decide(in DecideInput, p *Policy) Decision {
 		switch {
 		case reject || suggestReject:
 			d.Suggested = "reject"
-		case authHold && in.Auth.Burst && strong == 0 && medium <= 1:
-			d.Suggested = "keep_out"
 		case authHold:
 			d.Suggested = "remove"
 		default:

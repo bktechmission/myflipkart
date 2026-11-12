@@ -58,6 +58,7 @@ async function init(): Promise<void> {
   $("#whoName").textContent = me.name || "Guest";
   $("#avatar").textContent = (me.name || "G")[0];
   if (me.role === "admin") $("#adminLink").classList.remove("hide");
+  if (me.role === "seller") $("#sellerLink").classList.remove("hide");
   await newChat();
   loadOrders();
   loadSessions();

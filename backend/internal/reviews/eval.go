@@ -31,6 +31,9 @@ import (
 //go:embed golden/golden.json
 var goldenJSON []byte
 
+//go:embed golden/heldout.json
+var heldoutJSON []byte
+
 type GoldenCase struct {
 	ID             string   `json:"id"`
 	Set            string   `json:"set"` // golden | adversarial | injection
@@ -42,13 +45,18 @@ type GoldenCase struct {
 	HonestNegative bool     `json:"honest_negative,omitempty"`
 }
 
-// Golden returns the synthetic golden set.
-func Golden() []GoldenCase {
+// Golden returns the dev split: the synthetic golden set written alongside the rules.
+func Golden() []GoldenCase { return loadCases(goldenJSON) }
+
+// HeldOut returns the held-out split, written without seeing the rules (may be empty).
+func HeldOut() []GoldenCase { return loadCases(heldoutJSON) }
+
+func loadCases(b []byte) []GoldenCase {
 	var g struct {
 		Note  string       `json:"note"`
 		Cases []GoldenCase `json:"cases"`
 	}
-	if err := json.Unmarshal(goldenJSON, &g); err != nil {
+	if err := json.Unmarshal(b, &g); err != nil {
 		panic(err) // embedded file, validated by tests
 	}
 	return g.Cases
@@ -76,11 +84,21 @@ type EvalRow struct {
 	Flipped string   `json:"flipped,omitempty"` // action with the star rating flipped
 }
 
+// SplitResult is the held-out split's breakdown (its gate rates are in Rates as heldout_*).
+type SplitResult struct {
+	N        int                           `json:"n"`
+	PerRule  map[string]PRF                `json:"per_rule"`
+	PerLang  map[string]map[string]float64 `json:"per_lang"`
+	PerSet   map[string]map[string]float64 `json:"per_set"`
+	Failures []EvalRow                     `json:"failures"`
+}
+
 type EvalResult struct {
 	Tagger    string                        `json:"tagger"`
 	Policy    string                        `json:"policy_version"`
 	Rates     map[string]float64            `json:"rates"`
 	PerRule   map[string]PRF                `json:"per_rule"`
+	HeldOut   *SplitResult                  `json:"heldout,omitempty"` // nil until held-out cases exist
 	PerLang   map[string]map[string]float64 `json:"per_lang"`
 	PerSet    map[string]map[string]float64 `json:"per_set"`
 	Scenarios map[string]map[string]any     `json:"scenarios"`
@@ -98,7 +116,12 @@ func RunEval(ctx context.Context) *EvalResult {
 		PerLang: map[string]map[string]float64{}, PerSet: map[string]map[string]float64{}, Scenarios: map[string]map[string]any{},
 		Guards: map[string]bool{}, LatencyMS: map[string]map[string]float64{}}
 	lat := map[string][]float64{}
-	evalGolden(ctx, res, lat)
+	dev := evalGolden(ctx, Golden(), res.Rates, "", lat)
+	res.N, res.PerRule, res.PerLang, res.PerSet, res.Failures = dev.N, dev.PerRule, dev.PerLang, dev.PerSet, dev.Failures
+	if ho := HeldOut(); len(ho) > 0 {
+		h := evalGolden(ctx, ho, res.Rates, "heldout_", lat)
+		res.HeldOut = &h
+	}
 	evalScenarios(ctx, res)
 	evalLLMGuards(ctx, res, lat)
 	res.Rates["exactly_once"] = boolF(exactlyOnce(ctx))
@@ -157,10 +180,10 @@ func contentRules(r model.Review, p *Policy) []string {
 	return out
 }
 
-func evalGolden(ctx context.Context, res *EvalResult, lat map[string][]float64) {
+// evalGolden scores one split; its gate rates go into rates with the prefix.
+func evalGolden(ctx context.Context, cases []GoldenCase, rates map[string]float64, prefix string, lat map[string][]float64) SplitResult {
 	p := DefaultPolicy()
-	cases := Golden()
-	res.N = len(cases)
+	res := SplitResult{N: len(cases), PerRule: map[string]PRF{}, PerLang: map[string]map[string]float64{}, PerSet: map[string]map[string]float64{}}
 	type acc struct{ ok, n int }
 	bySet, byLang := map[string]*acc{}, map[string]*acc{}
 	tp, fp, fn := map[string]int{}, map[string]int{}, map[string]int{}
@@ -246,12 +269,13 @@ func evalGolden(ctx context.Context, res *EvalResult, lat map[string][]float64) 
 	for _, a := range bySet {
 		pass += a.ok
 	}
-	res.Rates["action_accuracy"] = round4(ratioOr1(pass, len(cases)))
-	res.Rates["auto_reject_precision"] = round4(ratioOr1(rejOK, rejN))
-	res.Rates["honest_negative_kept"] = round4(ratioOr1(honestOK, honestN))
-	res.Rates["injection_held"] = round4(ratioOr1(injOK, injN))
-	res.Rates["adversarial_recall"] = round4(ratioOr1(advOK, advN))
-	res.Rates["sentiment_blind"] = round4(ratioOr1(blindOK, len(cases)))
+	rates[prefix+"action_accuracy"] = round4(ratioOr1(pass, len(cases)))
+	rates[prefix+"auto_reject_precision"] = round4(ratioOr1(rejOK, rejN))
+	rates[prefix+"honest_negative_kept"] = round4(ratioOr1(honestOK, honestN))
+	rates[prefix+"injection_held"] = round4(ratioOr1(injOK, injN))
+	rates[prefix+"adversarial_recall"] = round4(ratioOr1(advOK, advN))
+	rates[prefix+"sentiment_blind"] = round4(ratioOr1(blindOK, len(cases)))
+	return res
 }
 
 func evalScenarios(ctx context.Context, res *EvalResult) {

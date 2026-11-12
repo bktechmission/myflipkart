@@ -114,7 +114,8 @@ type SellerStanding struct {
 	Returns    int      `json:"returns"`
 	ReturnRate float64  `json:"return_rate"`
 	Complaints int      `json:"complaints"`
-	Status     string   `json:"status"` // good | watch | suspended
+	Strikes    int      `json:"review_strikes"` // review-fraud strikes a person gave (ReviewGuard)
+	Status     string   `json:"status"`         // good | watch | suspended
 	Reasons    []string `json:"reasons"`
 }
 
@@ -164,6 +165,10 @@ func (t *Tools) Sellers() []SellerStanding {
 			s.ReturnRate = math.Round(float64(s.Returns)/float64(s.Orders)*100) / 100
 		}
 		s.Status = "good"
+		s.Strikes = t.S.SellerStrikes(s.Seller)
+		if s.Strikes > 0 {
+			s.Reasons = append(s.Reasons, fmt.Sprintf("%d review-fraud strike(s)", s.Strikes))
+		}
 		if s.Complaints > 0 {
 			s.Reasons = append(s.Reasons, fmt.Sprintf("%d complaint(s)", s.Complaints))
 		}
@@ -174,7 +179,7 @@ func (t *Tools) Sellers() []SellerStanding {
 			s.Reasons = append(s.Reasons, fmt.Sprintf("low ratings (%.1f)", s.AvgRating))
 		}
 		switch {
-		case s.Complaints >= 2 || (s.Orders >= 4 && s.ReturnRate >= 0.5) || (s.AvgRating > 0 && s.AvgRating < 3.5):
+		case s.Strikes >= 3 || s.Complaints >= 2 || (s.Orders >= 4 && s.ReturnRate >= 0.5) || (s.AvgRating > 0 && s.AvgRating < 3.5):
 			s.Status = "suspended"
 		case len(s.Reasons) > 0:
 			s.Status = "watch"

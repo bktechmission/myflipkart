@@ -175,6 +175,14 @@ func report(r *evals.Result) {
 		for path, m := range rv.LatencyMS {
 			fmt.Printf("  latency %-6s n=%v p95=%vms (target %vms)\n", path, m["n"], m["p95"], m["target_p95"])
 		}
+		if h := rv.HeldOut; h != nil {
+			fmt.Printf("  held-out split: %d cases\n", h.N)
+			for _, f := range h.Failures {
+				fmt.Printf("  x held-out [%s/%s] %q expected %s got %s\n", f.Set, f.Lang, trunc(f.Text, 60), f.Expect, f.Got)
+			}
+		} else {
+			fmt.Println("  held-out split: no cases yet (heldout_* gates skipped)")
+		}
 		for _, f := range rv.Failures {
 			fmt.Printf("  x [%s/%s] %q expected %s got %s (rules %v, want %v)\n", f.Set, f.Lang, trunc(f.Text, 60), f.Expect, f.Got, f.Rules, f.Want)
 		}

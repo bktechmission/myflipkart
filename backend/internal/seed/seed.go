@@ -259,7 +259,8 @@ type DemoUser struct{ CustomerID, Email, Name string }
 var DemoUsers = []DemoUser{
 	{"C1001", "aarav@example.com", "Aarav Mehta"}, // admin in the demo (ADMIN_EMAILS)
 	{"C1002", "meera@example.com", "Meera Iyer"},
-	{"C1003", "sam@example.com", "Sam Lee"}, // no orders: tests empty states
+	{"C1003", "sam@example.com", "Sam Lee"},                          // no orders: tests empty states
+	{"C1004", "seller@example.com", "SoundNest Store (demo seller)"}, // seller account: sees its reviews in general terms, can appeal
 }
 
 type orderSpec struct {
