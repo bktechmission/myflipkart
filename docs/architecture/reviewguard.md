@@ -131,7 +131,11 @@ its last trusted value until a person clears it; a person can also freeze it. Ad
 | Overfitting the golden set | dev vs held-out split; held-out gates apply once it has cases |
 
 Known limits: normalization covers the compatibility ranges reviews use, not all of NFKC; links spelled with spaces
-("example . com") aren't caught; the rule tagger can't judge new insults, so in rules mode those wait for a person.
+("example . com") aren't caught; the rule tagger can't judge new insults or slurs it has no word for, so in rules
+mode name-calling and dehumanizing language without a known word wait for a person (an LLM label alone never
+auto-rejects); reviews in languages other than English and Hinglish are held for a person who reads them; there is
+no rule yet for promotion or solicitation (referral codes, "DM me"), only links and contact details are masked.
+The held-out set measures these gaps (see `make eval`).
 
 ## Evals
 

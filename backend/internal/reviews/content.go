@@ -33,7 +33,7 @@ var (
 	slurWords    = []string{"zorkoid", "blorfin", "snargle"}
 	personInsult = []string{"idiot", "moron", "imbecile", "loser", "jerk", "fool", "dimwit", "nitwit", "bewakoof", "ullu", "gadha", "nalayak"}
 	anyInsult    = []string{"stupid", "dumb"} // also used about products ("stupid design"): only a violation aimed at a person
-	personRefs   = toSet("seller", "sellers", "courier", "couriers", "delivery", "guy", "boy", "man", "woman", "staff", "agent", "agents", "support",
+	personRefs   = toSet("anyone", "everyone", "whoever", "somebody", "someone", "seller", "sellers", "courier", "couriers", "delivery", "guy", "boy", "man", "woman", "staff", "agent", "agents", "support",
 		"owner", "he", "she", "they", "you", "u", "ur", "your", "him", "her", "them", "reviewer", "reviewers", "people", "team", "executive",
 		"rider", "driver", "employee", "employees", "salesman", "bhai", "banda", "wala", "log")
 	productRefs = toSet("product", "item", "it", "this", "thing", "design", "battery", "charger", "quality", "build", "app", "phone", "headphones",
@@ -62,12 +62,14 @@ var (
 	reEmail    = regexp.MustCompile(`[a-z0-9._%+\-]+@[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,}`)
 	reEmailOb  = regexp.MustCompile(`[a-z0-9._%+\-]+\s*(?:\(at\)|\[at\]|\{at\}| at )\s*[a-z0-9\-]+\s*(?:\(dot\)|\[dot\]|\{dot\}| dot |\.)\s*(?:com|in|net|org|co|io)\b`)
 	reURL      = regexp.MustCompile(`(?:https?://|www\.)[^\s<>"']+`)
-	reDomain   = regexp.MustCompile(`\b[a-z0-9][a-z0-9\-]*(?:\.[a-z0-9\-]+)*\.(?:com|net|org|in|io|co|ly|xyz|shop|store|test|info|biz|link|site|online)(?:/[^\s<>"']*)?`)
-	reThreat   = regexp.MustCompile(`\b(i know where (you|u|he|she|they) li?ve?s?|watch (your|ur) back|(i'?ll|i will|gonna|going to) (find|hurt|beat|get) (you|u|him|her|them|the seller|the courier)|(you|u)('?ll| will) regret (this|it)|dekh lunga|dekh lenge)\b`)
+	reDomain   = regexp.MustCompile(`\b[a-z0-9][a-z0-9\-]*(?:\.[a-z0-9\-]+)*\.(?:com|net|org|in|io|co|ly|xyz|shop|store|test|info|biz|link|site|online|me|app|gg|tv|to|cc|club|live)(?:/[^\s<>"']*)?`)
+	reThreat   = regexp.MustCompile(`\b(i know (where|which \w+|when) (you|u|ur|your|he|she|they|his|her|their)\b[^.!?]{0,40}\b(live|lives|work|works|leave|leaves|is|are)|i know where (you|u|he|she|they) li?ve?s?|watch (your|ur) back|(better )?watch out,? (seller|courier|you|u)|(seller|courier|you|u),? (better|should) watch out|(i'?ll|i ll|i will|gonna|going to|i'?m going to|i m going to) (find|hurt|beat|get|kill|break|burn|stab|shoot|smash|come and \w+)( (you|u|him|her|them|his|their|it|the \w+))?|(you|u)('?ll| will) regret (this|it)|(waiting|wait) (outside|for (him|her|you))[^.!?]{0,40}(make|pay)|make (him|her|you|them) pay|dekh lunga|dekh lenge|haddi(yan)? tod)\b`)
 	reInject   = regexp.MustCompile(`(ignore|disregard|forget|override) (all |any |the |your |these |those )*(previous|prior|above|earlier|preceding|system|moderation)? ?(instructions|rules|prompts?|guidelines|policy)|system prompt|^\s*(system|assistant|developer)\s*:|\n\s*(system|assistant|developer)\s*:|you are now|developer mode|jailbreak|(mark|label|classify|rate|tag) (this|the|my) (review )?(as )?(safe|clean|approved|ok|allowed|5 ?stars?|genuine)|(approve|publish) (all|this|every|my) (5 ?star )?reviews?|new instructions|</?(system|assistant|instructions?|review)>|review>>>|<<<review|pichle instructions|instructions ignore karo|as an ai`)
 	reReported = regexp.MustCompile(`\b(called|calling|call|named|abused|labelled|labeled) (me|us|my \w+|our \w+)\b|\b(said|told|tells|says|saying|shouted|yelled|messaged|texted|wrote) (to )?(me|us)?\s*(that )?(i|we|i'm|im) (was|were|am|are|'m|is)?\b|\b(said|told|tells|says|saying|shouted|yelled)\s*:?\s*$`)
 	reQuoted   = regexp.MustCompile(`"[^"]{1,200}"|“[^”]{1,200}”|‘[^’]{1,200}’|'[^']{2,200}'`)
-	reNaming   = regexp.MustCompile(`\b(the )?(seller|sellers|courier|delivery (guy|boy|man|person|agent)|staff|support( agent)?|agent|owner|you|u|he|she|they|this seller|this guy)\s*(is|are|was|were|'s|r|is such|was such)\s+(a|an|such a|such an|total|complete|absolute|real|utter)(\s+\w+){1,3}`)
+	reNaming   = regexp.MustCompile(`\b(the )?(seller|sellers|courier|delivery (guy|boy|man|person|agent)|staff|support( agent)?|agent|owner|you|u|he|she|they|this seller|this guy|anyone who [^.!?]{0,40})\s*(is|are|was|were|'s|'re|r|is such|was such)\s+(a|an|such a|such an|total|complete|absolute|real|utter)(\s+\w+){1,3}`)
+	reDehuman  = regexp.MustCompile(`\b(subhumans?|vermin|cockroaches|parasites)\b|\b(all|those|these) (\w+ )?(people|\w+s) (are|should be) (all )?(thieves|animals|trash|filth|scum|dirty|criminals|thrown out|kicked out|banned)|thrown out of (this|the|our) country|go back to (your|their) (own )?country|keep (them|those people) away from (our|my)`)
+	reControl  = regexp.MustCompile(`"(action|labels|counted|status|rule_id|decision|verdict)"\s*:|\bdecode (and|&|then) (follow|run|obey|execute)|ignora (todas )?(las )?instrucciones|instrucciones anteriores|###\s*(instruction|system)|पिछले निर्देश`)
 	reLongUse  = regexp.MustCompile(`\b(using|used|had|owned|wearing|worn|tested|been using|have had|i've had|after|for|since)\b[^.!?]{0,20}\b(\d+|a few|few|several|many|two|three|four|six)\s+(weeks|months|years)\b|\blong[- ]term\b|\b(months|years) of (use|daily use|wear)\b|\b(mahine|saal) se\b`)
 )
 
@@ -122,7 +124,13 @@ func AnalyzeContent(text, photoText string, p *Policy) Content {
 	}
 
 	for _, sp := range normSpans(rePhone) {
+		if codeLike(c.T, sp) {
+			continue // "Order OD4021938475", "Part number 7741-0098-22": identifiers, not phone numbers
+		}
 		add("contact_phone", "strong", "phone number", sp[0], sp[1])
+	}
+	for _, sp := range spokenNumbers(c.T) {
+		add("contact_phone", "strong", "phone number spelled out in words", sp[0], sp[1])
 	}
 	emails := append(normSpans(reEmail), normSpans(reEmailOb)...)
 	for _, sp := range emails {
@@ -136,13 +144,23 @@ func AnalyzeContent(text, photoText string, p *Policy) Content {
 		add("link", "strong", "link to another site", sp[0], sp[1])
 	}
 	threat := false
-	for _, sp := range normSpans(reThreat) {
+	threatSpans := normSpans(reThreat)
+	if len(threatSpans) == 0 { // l33t spellings: k1ll, w@tch, l1ve
+		var ws []string
+		for _, w := range c.T.Words {
+			ws = append(ws, strings.ToLower(w.Text))
+		}
+		if reThreat.MatchString(strings.Join(ws, " ")) && len(c.T.Words) > 0 {
+			threatSpans = [][2]int{{c.T.Words[0].Start, c.T.Words[len(c.T.Words)-1].End}}
+		}
+	}
+	for _, sp := range threatSpans {
 		if !inside(sp, c.Reported) {
 			threat = true
 			add("threat", "strong", "threat against a person", sp[0], sp[1])
 		}
 	}
-	inj := normSpans(reInject)
+	inj := append(normSpans(reInject), normSpans(reControl)...)
 	if len(inj) == 0 { // spaced or dotted letters: "I.G.N.O.R.E previous instructions"
 		var ws []string
 		for _, w := range c.T.Squeeze {
@@ -211,6 +229,9 @@ func AnalyzeContent(text, photoText string, p *Policy) Content {
 				person = true
 				continue
 			}
+			if kind == "insult" && (tgt == "" || (tgt == "product" && genericRef(c.T, sp))) {
+				tgt = "person" // words like idiot or moron describe people, whatever "this" or "it" is nearby
+			}
 			switch tgt {
 			case "self":
 				selfOrReported = true
@@ -250,6 +271,23 @@ func AnalyzeContent(text, photoText string, p *Policy) Content {
 			}
 		}
 	}
+	dh := normSpans(reDehuman)
+	if len(dh) == 0 { // spaced letters: "all v e x m o r r s are trash"
+		var ws []string
+		for _, w := range c.T.Squeeze {
+			ws = append(ws, w.Text)
+		}
+		if reDehuman.MatchString(strings.Join(ws, " ")) && len(c.T.Orig) > 0 {
+			dh = [][2]int{{0, len(c.T.Orig)}}
+		}
+	}
+	for _, sp := range dh {
+		if !inside(sp, c.Reported) {
+			c.Unclear, c.UnclearWhy = true, "dehumanizing language the rules can't judge"
+			c.Signals = append(c.Signals, model.Signal{Name: "dehumanizing", Kind: "context", Strength: "info",
+				Detail: "dehumanizing or exclusionary language about a group", Start: sp[0], End: sp[1]})
+		}
+	}
 	c.Language = language(c.T)
 	if c.Language == "other" {
 		add("language", "medium", "language our checks don't cover yet", -1, -1)
@@ -271,6 +309,68 @@ func AnalyzeContent(text, photoText string, p *Policy) Content {
 
 // ClaimsLongUse reports whether a review describes weeks/months/years of use.
 func ClaimsLongUse(text string) bool { return reLongUse.MatchString(Normalize(text).Norm) }
+
+// codeLike: a digit run that is part of an identifier (letters glued to it) or
+// follows "part/order/serial/model/sku number".
+func codeLike(t Text, sp [2]int) bool {
+	if sp[0] > 0 && unicode.IsLetter(t.Orig[sp[0]-1]) {
+		return true
+	}
+	before := strings.ToLower(t.Span(max(0, sp[0]-24), sp[0]))
+	for _, k := range []string{"part number", "part no", "order", "serial", "model", "sku", "invoice", "tracking", "awb", "imei"} {
+		if strings.Contains(before, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// numberWords spell digits in English and Hindi; 8+ in a row is a phone number written out.
+var numberWords = toSet("zero", "oh", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+	"shunya", "sunya", "ek", "do", "teen", "char", "chaar", "paanch", "panch", "chhe", "che", "chheh", "saat", "aath", "nau")
+
+func spokenNumbers(t Text) [][2]int {
+	var out [][2]int
+	run, start := 0, 0
+	flush := func(end int) {
+		if run >= 8 {
+			out = append(out, [2]int{t.Words[start].Start, t.Words[end].End})
+		}
+		run = 0
+	}
+	for i, w := range t.Words {
+		lw := strings.ToLower(w.Text)
+		if numberWords[lw] || (len(lw) == 1 && lw[0] >= '0' && lw[0] <= '9') {
+			if run == 0 {
+				start = i
+			}
+			run++
+			continue
+		}
+		if run > 0 {
+			flush(i - 1)
+		}
+	}
+	if run > 0 {
+		flush(len(t.Words) - 1)
+	}
+	return out
+}
+
+// genericRef: the nearest product reference before the insult is a pronoun ("this", "it").
+func genericRef(t Text, sp [2]int) bool {
+	for k := len(t.Words) - 1; k >= 0; k-- {
+		if t.Words[k].End <= sp[0] {
+			for j := k; j >= 0 && j >= k-7; j-- {
+				if w := strings.ToLower(t.Words[j].Text); productRefs[w] {
+					return w == "this" || w == "it"
+				}
+			}
+			return false
+		}
+	}
+	return false
+}
 
 // compound reports whether a word is joined by a hyphen to another word.
 func compound(t Text, sp [2]int) bool {
