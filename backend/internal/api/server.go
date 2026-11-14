@@ -48,6 +48,7 @@ type Server struct {
 	tools     *agent.Tools
 	rg        *reviews.Guard // ReviewGuard
 	rvLimit   *TokenBucket   // review submits per customer
+	labLimit  *TokenBucket   // ReviewGuard Lab dry runs per session
 	Hub       *live.Hub      // human handoff: queue, agent console, simulated teammates
 	signer    auth.Signer
 	providers map[string]*auth.Provider
@@ -74,6 +75,7 @@ func New(cfg config.Config, st *store.Store, r *search.Retriever, gw, canaryGW *
 	if gw != nil { // a nil *Gateway must not become a non-nil interface
 		s.rg.GW = gw
 	}
+	s.labLimit = NewTokenBucket(30, 10)                 // lab dry runs: nothing saved, but the tagger may call an LLM
 	s.rvLimit = NewTokenBucket(8, 8)                    // per customer: generous for people, a wall for floods
 	if n := s.rg.Recover(context.Background()); n > 0 { // finish reviews a crash left pending
 		log.Printf("ReviewGuard: recovered %d pending review(s)", n)

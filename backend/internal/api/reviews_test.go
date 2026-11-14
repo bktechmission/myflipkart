@@ -300,3 +300,39 @@ func TestProductPageShowsTrustedRatingAndEscapes(t *testing.T) {
 		t.Fatalf("fake campaign visible or rating not paused on the product page")
 	}
 }
+
+func TestReviewGuardLabIsADryRun(t *testing.T) {
+	e := newEnv(t)
+	if w := e.do("", "POST", "/api/reviews/lab", jsonBody(map[string]any{"product_id": "P1005", "stars": 5, "text": "hi", "author": "verified"}), nil); w.Code != 401 {
+		t.Errorf("signed out: %d", w.Code)
+	}
+	if w := e.do("", "GET", "/guard", nil, nil); w.Code != 302 {
+		t.Errorf("signed-out page should redirect to login: %d", w.Code)
+	}
+	if w := e.do("G-guest", "GET", "/guard", nil, nil); w.Code != 200 || !strings.Contains(w.Body.String(), "ReviewGuard Lab") {
+		t.Errorf("guest page: %d", w.Code)
+	}
+	var info struct {
+		Products []struct{ ID string } `json:"products"`
+		Authors  []reviews.LabAuthor   `json:"authors"`
+		Presets  []reviews.LabPreset   `json:"presets"`
+	}
+	decode(t, e.do("G-guest", "GET", "/api/reviews/lab", nil, nil), &info)
+	if len(info.Products) == 0 || len(info.Authors) != len(reviews.LabAuthors) || len(info.Presets) != len(reviews.LabPresets) {
+		t.Fatalf("lab info: %+v", info)
+	}
+	before := len(e.s.store.Reviews(func(model.Review) bool { return true }))
+	w := post(e, "G-guest", "/api/reviews/lab", map[string]any{"product_id": "P1005", "stars": 2,
+		"text": "The seller is an idiot and never answered my emails.", "author": "verified"})
+	var res reviews.LabResult
+	decode(t, w, &res)
+	if w.Code != 200 || res.Action != "reject" || len(res.Rules) == 0 || len(res.Stages) != 6 {
+		t.Fatalf("lab check: %d %+v", w.Code, res)
+	}
+	if after := len(e.s.store.Reviews(func(model.Review) bool { return true })); after != before {
+		t.Errorf("lab saved a review: %d -> %d", before, after)
+	}
+	if w := post(e, "G-guest", "/api/reviews/lab", map[string]any{"product_id": "P1005", "stars": 9, "text": "x", "author": "verified"}); w.Code != 400 {
+		t.Errorf("bad stars: %d", w.Code)
+	}
+}
