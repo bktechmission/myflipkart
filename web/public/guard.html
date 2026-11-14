@@ -1,0 +1,60 @@
+<!doctype html>
+<!--
+  Ask Sauby · MyFlipKart.com — ReviewGuard Lab: type any review and watch ReviewGuard check it (dry run)
+  Developed by Bhupender Kumar Panwar · Product Manager: Saurabh Dahake
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReviewGuard Lab · MyFlipKart.com</title>
+<script src="/dist/theme.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="row" style="justify-content:space-between">
+    <div class="brand"><span class="mark">S</span><span>ReviewGuard Lab</span></div>
+    <div class="row"><a class="btn ghost sm" href="/"><span data-icon="chat"></span>Store</a>
+      <a class="btn ghost sm" href="https://bktechmission.github.io/myflipkart/reviewguard.html" target="_blank" rel="noopener"><span data-icon="book"></span>How it works</a>
+      <button class="iconbtn" id="theme" aria-label="Switch theme"></button>
+      <form method="post" action="/auth/logout"><button class="iconbtn" data-icon="logout" title="Sign out" aria-label="Sign out"></button></form></div>
+  </header>
+  <p class="demo-note">Write a fake, paid or abusive review and see what ReviewGuard does with it. This is a dry run on synthetic data:
+    nothing you type is saved, published or counted. Placeholder words like <i>zorkoid</i> stand in for slurs.</p>
+
+  <div class="lab-grid">
+    <form class="card" id="labForm" autocomplete="off">
+      <h3>Write a review</h3>
+      <p class="note">Start from an example or write your own.</p>
+      <div class="row lab-presets" id="presets" aria-label="Examples"></div>
+
+      <label class="lab-f"><span>Product</span><select class="inp" id="product"></select></label>
+      <label class="lab-f"><span>Who's writing it</span><select class="inp" id="author"></select></label>
+      <p class="muted lab-hint" id="authorNote"></p>
+
+      <fieldset class="rv-stars" id="stars"><legend>Stars</legend></fieldset>
+      <label class="lab-f"><span>Review</span>
+        <textarea class="inp" id="text" maxlength="2000" required placeholder="e.g. Best headphones ever!!! Life changing, must buy!"></textarea></label>
+      <div class="row" style="justify-content:space-between">
+        <span class="muted lab-hint" id="tagger"></span>
+        <button class="btn" id="run"><span data-icon="flask"></span>Run ReviewGuard</button>
+      </div>
+    </form>
+
+    <section class="card" id="result" aria-live="polite">
+      <h3>Result</h3>
+      <p class="note">Pick an example or write a review, then run it.</p>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:12px">
+    <div class="row" style="justify-content:space-between"><h3>This session</h3>
+      <button class="btn ghost sm" id="clear">Clear</button></div>
+    <p class="note">Your checks, newest first. Kept in this tab only.</p>
+    <div id="history"></div>
+  </section>
+</div>
+<script type="module" src="/dist/guard.js"></script>
+</body>
+</html>

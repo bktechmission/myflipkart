@@ -129,6 +129,8 @@ d.box(1040, 140, 300, 90, "Moderation job\nruns now; Recover() finishes\nanythin
 d.arrow(280, 185, 340, 185)
 d.arrow(620, 185, 680, 185)
 d.arrow(980, 185, 1040, 185)
+d.box(1380, 140, 280, 90, "ReviewGuard Lab · /guard\nPOST /api/reviews/lab\ndry run: nothing saved", "edge", 15)
+d.arrow(1440, 230, 1100, 330, dashed=True, label="dry run: Analyze() on a snapshot copy")
 d.zone(20, 280, 1660, 200, "Deterministic checks (code)", "#e9ecef")
 d.box(40, 330, 280, 120, "Normalize\nNFKC subset · look-alikes\nl33t · zero-width · spacing\n(original kept)", "guard", 15)
 d.box(370, 330, 320, 120, "Content rules\ncontact · links · placeholder slurs\ninsults by target · threats\ninjection · language · duplicates", "guard", 15)

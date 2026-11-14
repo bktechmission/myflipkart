@@ -6,6 +6,9 @@
 //	          GET  /api/reviews/mine?product=    my reviews of a product, and my delivered orders I can review
 //	          POST /api/reviews                  submit (own delivered order only; idempotency key; rate limited)
 //	          POST /api/reviews/{id}/appeal      ask a second person to look
+//	lab       GET  /guard                        ReviewGuard Lab: type any review, see every stage (dry run)
+//	          GET  /api/reviews/lab              products, author types and presets for the lab
+//	          POST /api/reviews/lab              run the pipeline on a hand-written review; nothing is saved
 //	sellers   GET  /api/seller/reviews           which reviews stopped counting, in general terms (no reviewer identity)
 //	          POST /api/seller/appeals           appeal a reason group
 //	          POST /api/seller/reports           report a review (never hides it by itself)
@@ -40,6 +43,15 @@ func (s *Server) reviewRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/reviews/mine", s.withAuth(s.myReviews, false))
 	m.HandleFunc("POST /api/reviews", s.withAuth(s.submitReview, false))
 	m.HandleFunc("POST /api/reviews/{id}/appeal", s.withAuth(s.appealReview, false))
+	m.HandleFunc("GET /guard", func(w http.ResponseWriter, r *http.Request) {
+		if sess := s.session(r); sess == nil {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		http.ServeFile(w, r, filepath.Join(s.cfg.WebDir, "guard.html"))
+	})
+	m.HandleFunc("GET /api/reviews/lab", s.withAuth(s.labInfo, false))
+	m.HandleFunc("POST /api/reviews/lab", s.withAuth(s.labCheck, false))
 	m.HandleFunc("GET /api/seller/reviews", s.withAuth(s.sellerReviews, false))
 	m.HandleFunc("POST /api/seller/appeals", s.withAuth(s.sellerAppeal, false))
 	m.HandleFunc("POST /api/seller/reports", s.withAuth(s.sellerReport, false))
@@ -189,6 +201,41 @@ func (s *Server) submitReview(w http.ResponseWriter, r *http.Request, sess *auth
 		return
 	}
 	writeJSON(w, 200, map[string]any{"review": s.authorView(rv), "created": created, "rating": s.rg.Rating(rv.ProductID)})
+}
+
+// ---------------- ReviewGuard Lab (dry run) ----------------
+
+func (s *Server) labInfo(w http.ResponseWriter, r *http.Request, _ *auth.Session) {
+	type prod struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Seller   string `json:"seller"`
+		Category string `json:"category"`
+	}
+	ps := []prod{}
+	for _, p := range s.store.Products() {
+		ps = append(ps, prod{p.ID, p.Name, seed.SellerOf(p), p.Category})
+	}
+	writeJSON(w, 200, map[string]any{"products": ps, "authors": reviews.LabAuthors, "presets": reviews.LabPresets,
+		"default_product": reviews.FakeProduct, "tagger": s.rg.TaggerName(), "policy_version": s.rg.P.Version})
+}
+
+func (s *Server) labCheck(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
+	var in reviews.LabInput
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&in) != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad request"})
+		return
+	}
+	if ok, _ := s.labLimit.Allow("lab:" + sess.ID); !ok {
+		writeJSON(w, 429, map[string]string{"error": "That's a lot of checks. Try again in a few seconds."})
+		return
+	}
+	res, err := s.rg.Lab(r.Context(), in)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, res)
 }
 
 func (s *Server) appealReview(w http.ResponseWriter, r *http.Request, sess *auth.Session) {

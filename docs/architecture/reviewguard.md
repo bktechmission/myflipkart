@@ -27,6 +27,7 @@ Walkthrough: [one review, step by step](https://bktechmission.github.io/myflipka
 | `guard.go` | submit, process exactly once, reassess, recover, case grouping |
 | `moderation.go` | case decisions, sanctions, appeals, reports, the Demo second moderator |
 | `simulate.go` | demo scenarios on synthetic data |
+| `lab.go` | ReviewGuard Lab: dry run of `Analyze` on a hand-written review, as a chosen kind of author |
 | `eval.go`, `fake.go`, `golden/` | eval harness, scripted fake LLM, dev and held-out golden sets |
 | `metrics.go` | admin metrics |
 
@@ -55,6 +56,9 @@ Walkthrough: [one review, step by step](https://bktechmission.github.io/myflipka
 | `GET /api/reviews/mine` | customer | my reviews (outcome, rule cited, appeal) and orders I can review |
 | `POST /api/reviews` | customer | submit |
 | `POST /api/reviews/{id}/appeal` | author | appeal a rejected, removed or not-counted review, once |
+| `GET /guard` | signed in (guests too) | ReviewGuard Lab page: write any review, see every stage |
+| `GET /api/reviews/lab` | signed in | products, author types and presets for the lab |
+| `POST /api/reviews/lab` | signed in | dry run (rate limit 30/min per session): the real pipeline, nothing saved |
 | `GET /seller` | seller | the seller page |
 | `GET /api/seller/reviews` | seller | trusted ratings; not-counted reviews grouped by reason, in general terms (no reviewer identity) |
 | `POST /api/seller/appeals` | seller | appeal a reason group |
@@ -66,6 +70,25 @@ Walkthrough: [one review, step by step](https://bktechmission.github.io/myflipka
 | `POST /api/admin/reviews/appeals/{id}` | admin | uphold or overturn (not the first decider) |
 | `POST /api/admin/reviews/appeals/{id}/demo` | admin | Demo second moderator (`SIM_AGENTS=1` only, labelled simulated) |
 | `POST /api/admin/reviews/sim` | admin | demo scenarios: `fake5`, `rival1`, `viral`, `abuse`, `reset` (synthetic data) |
+
+## ReviewGuard Lab (dry run)
+
+`/guard` lets anyone signed in, guests included, type a fake, paid, abusive or tricky review and watch ReviewGuard handle it, stage by
+stage: normalize, content rules, behaviour, tagger, verifier, decision. Twelve presets cover the main cases (honest
+negative, seller's fake 5★, paid 5★, rival 1★, unverified, insult, spaced-out insult, disguised slur, phone number, prompt injection,
+quoted abuse, too fast); `lab_test.go` checks that each one gets the action it promises.
+
+- **Who wrote it.** The lab stands in for one kind of author: verified buyer, no purchase, brand-new account, reviewing
+  right after delivery, the seller's own staff (shares device and card), paid by the seller (cashback 90 min later), or a
+  rival seller's account (shares a device). Checks that only apply to some stars say so when they don't fire (paid: 5★;
+  rival: 1-2★).
+- **Nothing is saved.** The author's synthetic account, order, staff link and payout exist only in a private copy of
+  `ReviewSnapshot()`. No review, case, audit entry or rating changes, so the lab can't be used to move a product's
+  rating. Tests check the store is unchanged.
+- **Same pipeline.** It calls `Guard.Analyze`, the function every submitted review goes through, so the lab can't drift
+  from production behaviour. Templated, duplicate and burst checks compare against the store's real reviews.
+- **Cost guard.** With an LLM configured the tagger may call it, so the endpoint has its own rate limit and a 16 KB body cap.
+  On the free demo (`ROUTER=rules`) it never calls an LLM.
 
 ## The LLM tagger's contract
 
